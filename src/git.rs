@@ -49,6 +49,7 @@ pub fn get_git_diff(file_path: &Path) -> Option<String> {
 }
 
 /// Check if a path is inside a git repository
+#[allow(dead_code)]
 pub fn is_git_repo(path: &Path) -> bool {
     let mut cmd = Command::new("git");
     cmd.args(["rev-parse", "--is-inside-work-tree"])
@@ -63,6 +64,7 @@ pub fn is_git_repo(path: &Path) -> bool {
 }
 
 /// Get the git root directory for a path
+#[allow(dead_code)]
 pub fn get_git_root(path: &Path) -> Option<String> {
     let mut cmd = Command::new("git");
     cmd.args(["rev-parse", "--show-toplevel"]).current_dir(path);
