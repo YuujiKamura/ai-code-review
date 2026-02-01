@@ -171,10 +171,12 @@ impl CodeReviewer {
     }
 
     /// Set a log file path for review results
-    pub fn with_log_file(self, path: &Path) -> Self {
-        if let Ok(mut state) = self.state.lock() {
-            state.log_path = Some(path.to_path_buf());
-        }
+    pub fn with_log_file(self, path: impl Into<PathBuf>) -> Self {
+        let log_path = path.into();
+        self.state
+            .lock()
+            .expect("Failed to acquire state lock")
+            .log_path = Some(log_path);
         self
     }
 
@@ -218,45 +220,13 @@ impl CodeReviewer {
         let watcher = FolderWatcher::new(&self.path)?
             .with_filter(&ext_refs)
             .on_modify(move |path| {
-                // Check debounce
-                let should_review = {
-                    let mut state_lock = match state.lock() {
-                        Ok(s) => s,
-                        Err(_) => return,
-                    };
-                    let now = Instant::now();
-                    if let Some(last) = state_lock.last_review.get(path) {
-                        if now.duration_since(*last).as_millis() < debounce_ms as u128 {
-                            return;
-                        }
-                    }
-                    state_lock.last_review.insert(path.to_path_buf(), now);
-                    true
-                };
-
-                if !should_review || !running.load(Ordering::SeqCst) {
+                if !check_debounce(path, &state, debounce_ms) {
                     return;
                 }
-
-                // Perform the review using the shared helper
-                match perform_review(path, &prompt_template, backend, model.as_deref()) {
-                    Ok(result) => {
-                        // Write to log if configured
-                        if let Ok(state_lock) = state.lock() {
-                            if let Some(ref log_path) = state_lock.log_path {
-                                let _ = append_review_log(log_path, &result);
-                            }
-                        }
-
-                        // Call the callback
-                        if let Some(ref callback) = on_review {
-                            callback(result);
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Review error for {:?}: {}", path, e);
-                    }
+                if !running.load(Ordering::SeqCst) {
+                    return;
                 }
+                handle_file_change(path, &prompt_template, backend, model.as_deref(), &state, &on_review);
             });
 
         watcher.start()?;
@@ -305,6 +275,66 @@ fn append_review_log(log_path: &Path, result: &ReviewResult) -> Result<()> {
         .open(log_path)?;
     writeln!(file, "{}", json)?;
     Ok(())
+}
+
+/// Check if the file should be reviewed based on debounce timing
+///
+/// Returns `true` if review should proceed, `false` if debounced.
+fn check_debounce(
+    path: &Path,
+    state: &Arc<Mutex<ReviewerState>>,
+    debounce_ms: u64,
+) -> bool {
+    let mut state_lock = match state.lock() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let now = Instant::now();
+    if let Some(last) = state_lock.last_review.get(path) {
+        if now.duration_since(*last).as_millis() < debounce_ms as u128 {
+            return false;
+        }
+    }
+    state_lock.last_review.insert(path.to_path_buf(), now);
+    true
+}
+
+/// Process review result - log to file and invoke callback
+fn process_review_result(
+    result: ReviewResult,
+    state: &Arc<Mutex<ReviewerState>>,
+    on_review: &Option<Arc<ReviewCallback>>,
+) {
+    // Write to log if configured
+    if let Ok(state_lock) = state.lock() {
+        if let Some(ref log_path) = state_lock.log_path {
+            let _ = append_review_log(log_path, &result);
+        }
+    }
+
+    // Call the callback
+    if let Some(ref callback) = on_review {
+        callback(result);
+    }
+}
+
+/// Handle file modification event - perform review and process result
+fn handle_file_change(
+    path: &Path,
+    prompt_template: &str,
+    backend: Backend,
+    model: Option<&str>,
+    state: &Arc<Mutex<ReviewerState>>,
+    on_review: &Option<Arc<ReviewCallback>>,
+) {
+    match perform_review(path, prompt_template, backend, model) {
+        Ok(result) => {
+            process_review_result(result, state, on_review);
+        }
+        Err(e) => {
+            log::error!("Review error for {:?}: {}", path, e);
+        }
+    }
 }
 
 #[cfg(test)]
