@@ -16,6 +16,51 @@ use crate::git::get_git_diff;
 use crate::prompt::{build_prompt, PromptType, DEFAULT_REVIEW_PROMPT};
 use crate::result::ReviewResult;
 
+/// Core review logic - performs AI-powered code review on a file
+///
+/// This is the shared implementation used by both `review_file` and the `on_modify` callback.
+fn perform_review(
+    path: &Path,
+    prompt_template: &str,
+    backend: Backend,
+    model: Option<&str>,
+) -> Result<ReviewResult> {
+    // Get content (git diff or file content)
+    let content = get_git_diff(path)
+        .or_else(|| fs::read_to_string(path).ok())
+        .ok_or_else(|| {
+            CodeReviewError::IoError(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Cannot read file",
+            ))
+        })?;
+
+    if content.trim().is_empty() {
+        return Err(CodeReviewError::IoError(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "File content is empty",
+        )));
+    }
+
+    // Build the prompt
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let prompt = build_prompt(prompt_template, &file_name, &content);
+
+    // Run the review
+    let options = if let Some(m) = model {
+        AnalyzeOptions::with_model(m).with_backend(backend)
+    } else {
+        AnalyzeOptions::default().with_backend(backend)
+    };
+
+    let review = ai_prompt(&prompt, options)?;
+    Ok(ReviewResult::new(path.to_path_buf(), review).with_content(content))
+}
+
 /// Default debounce duration in milliseconds
 const DEFAULT_DEBOUNCE_MS: u64 = 500;
 
@@ -193,35 +238,9 @@ impl CodeReviewer {
                     return;
                 }
 
-                // Get content (git diff or file content)
-                let content = get_git_diff(path)
-                    .or_else(|| fs::read_to_string(path).ok());
-
-                let content = match content {
-                    Some(c) if !c.trim().is_empty() => c,
-                    _ => return,
-                };
-
-                // Build the prompt
-                let file_name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "unknown".to_string());
-
-                let prompt = build_prompt(&prompt_template, &file_name, &content);
-
-                // Run the review
-                let options = if let Some(ref m) = model {
-                    AnalyzeOptions::with_model(m).with_backend(backend)
-                } else {
-                    AnalyzeOptions::default().with_backend(backend)
-                };
-
-                match ai_prompt(&prompt, options) {
-                    Ok(review) => {
-                        let result = ReviewResult::new(path.to_path_buf(), review)
-                            .with_content(content);
-
+                // Perform the review using the shared helper
+                match perform_review(path, &prompt_template, backend, model.as_deref()) {
+                    Ok(result) => {
                         // Write to log if configured
                         if let Ok(state_lock) = state.lock() {
                             if let Some(ref log_path) = state_lock.log_path {
@@ -265,27 +284,7 @@ impl CodeReviewer {
 
     /// Review a single file immediately (without watching)
     pub fn review_file(&self, path: &Path) -> Result<ReviewResult> {
-        let content = get_git_diff(path)
-            .or_else(|| fs::read_to_string(path).ok())
-            .ok_or_else(|| CodeReviewError::IoError(
-                std::io::Error::new(std::io::ErrorKind::NotFound, "Cannot read file")
-            ))?;
-
-        let file_name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-
-        let prompt = build_prompt(&self.prompt_template, &file_name, &content);
-
-        let options = if let Some(ref m) = self.model {
-            AnalyzeOptions::with_model(m).with_backend(self.backend)
-        } else {
-            AnalyzeOptions::default().with_backend(self.backend)
-        };
-
-        let review = ai_prompt(&prompt, options)?;
-        Ok(ReviewResult::new(path.to_path_buf(), review).with_content(content))
+        perform_review(path, &self.prompt_template, self.backend, self.model.as_deref())
     }
 }
 

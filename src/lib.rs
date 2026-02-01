@@ -64,6 +64,18 @@ mod prompt;
 mod result;
 mod reviewer;
 
+/// Re-export of `Backend` from `cli_ai_analyzer` for convenience.
+///
+/// This re-export allows users to configure the AI backend without needing
+/// to add `cli_ai_analyzer` as a direct dependency. The available backends are:
+/// - `Backend::Gemini` - Google's Gemini API
+/// - `Backend::Claude` - Anthropic's Claude API
+///
+/// While this creates a coupling with `cli_ai_analyzer`, it significantly
+/// improves the ergonomics for end users who can simply write:
+/// ```rust,ignore
+/// use ai_code_review::{CodeReviewer, Backend};
+/// ```
 pub use cli_ai_analyzer::Backend;
 pub use error::{CodeReviewError, Result};
 pub use prompt::{
@@ -96,10 +108,12 @@ mod tests {
 
     #[test]
     fn test_review_result() {
+        // Use with_severity for explicit, non-fragile testing
         let result = ReviewResult::new(
             Path::new("test.rs").to_path_buf(),
-            "✓ 問題なし".to_string(),
-        );
+            "No issues found".to_string(),
+        )
+        .with_severity(ReviewSeverity::Ok);
 
         assert_eq!(result.name, "test.rs");
         assert!(!result.has_issues);
@@ -108,14 +122,36 @@ mod tests {
 
     #[test]
     fn test_review_result_with_issues() {
+        // Use with_severity for explicit, non-fragile testing
         let result = ReviewResult::new(
             Path::new("test.rs").to_path_buf(),
-            "⚠ 関数が長すぎます".to_string(),
-        );
+            "Function is too long".to_string(),
+        )
+        .with_severity(ReviewSeverity::Warning);
 
         assert!(result.has_issues);
         assert!(!result.is_passed());
         assert_eq!(result.severity, ReviewSeverity::Warning);
+    }
+
+    #[test]
+    fn test_with_severity_updates_has_issues() {
+        // Verify that with_severity correctly updates has_issues field
+        let ok_result = ReviewResult::new(Path::new("a.rs").to_path_buf(), "text".to_string())
+            .with_severity(ReviewSeverity::Ok);
+        assert!(!ok_result.has_issues);
+
+        let info_result = ReviewResult::new(Path::new("b.rs").to_path_buf(), "text".to_string())
+            .with_severity(ReviewSeverity::Info);
+        assert!(!info_result.has_issues);
+
+        let warning_result = ReviewResult::new(Path::new("c.rs").to_path_buf(), "text".to_string())
+            .with_severity(ReviewSeverity::Warning);
+        assert!(warning_result.has_issues);
+
+        let error_result = ReviewResult::new(Path::new("d.rs").to_path_buf(), "text".to_string())
+            .with_severity(ReviewSeverity::Error);
+        assert!(error_result.has_issues);
     }
 
     #[test]

@@ -73,6 +73,16 @@ impl ReviewResult {
         self
     }
 
+    /// Create a result with explicit severity (for testing or manual override)
+    ///
+    /// This method allows setting the severity directly, bypassing automatic detection.
+    /// Useful for testing or when the severity is known from external sources.
+    pub fn with_severity(mut self, severity: ReviewSeverity) -> Self {
+        self.severity = severity;
+        self.has_issues = matches!(severity, ReviewSeverity::Warning | ReviewSeverity::Error);
+        self
+    }
+
     /// Detect severity from review text
     fn detect_severity(review: &str) -> ReviewSeverity {
         let review_lower = review.to_lowercase();
