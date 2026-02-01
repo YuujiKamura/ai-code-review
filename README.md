@@ -32,6 +32,14 @@ AIエージェントが実装に没頭していると、視野が狭くなる:
 
 ## 使い方
 
+### GUI（experimental）
+
+```bash
+cargo run --features gui --bin gui
+```
+
+GUIは `gui-shell` を呼び出す最小シェルとして用意しており、ここから再構成する想定。
+
 ### 設計レビュー（推奨）
 
 ```rust

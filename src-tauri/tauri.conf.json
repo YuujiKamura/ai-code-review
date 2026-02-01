@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ai-code-review",
+  "version": "0.1.0",
+  "identifier": "com.yuuji.ai-code-review",
+  "build": {
+    "frontendDist": "../gui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "ai-code-review",
+        "width": 900,
+        "height": 640
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}
