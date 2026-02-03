@@ -48,4 +48,8 @@ pub enum CodeReviewError {
     /// Git error
     #[error("Git error: {0}")]
     GitError(String),
+
+    /// Parse error (tree-sitter)
+    #[error("Parse error: {0}")]
+    ParseError(String),
 }

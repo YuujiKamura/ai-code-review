@@ -32,7 +32,14 @@ tauri-plugin-opener = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
 
+# tree-sitter for AST parsing
+tree-sitter = "0.24"
+tree-sitter-rust = { version = "0.23", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-python = { version = "0.23", optional = true }
+
 [features]
+default = ["lang-rust"]
 gui = [
     "gui-shell",
     "tauri",
@@ -40,6 +47,10 @@ gui = [
     "tauri-plugin-dialog",
     "tauri-plugin-notification",
 ]
+lang-rust = ["tree-sitter-rust"]
+lang-typescript = ["tree-sitter-typescript"]
+lang-python = ["tree-sitter-python"]
+context = ["lang-rust"]
 
 [dev-dependencies]
 tempfile = "3"

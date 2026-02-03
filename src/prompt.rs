@@ -69,7 +69,7 @@ pub const SECURITY_REVIEW_PROMPT: &str = r#"以下のコードをセキュリテ
 - ✓ セキュリティ上の問題なし"#;
 
 /// Architecture review prompt
-pub const ARCHITECTURE_REVIEW_PROMPT: &str = r#"以下のコード変更をアーキテクチャの観点からレビューしてください。
+pub const ARCHITECTURE_REVIEW_PROMPT: &str = r#"以下のコードをアーキテクチャの観点からレビューしてください。
 
 ファイル: {file_name}
 
@@ -85,11 +85,60 @@ pub const ARCHITECTURE_REVIEW_PROMPT: &str = r#"以下のコード変更をア�
 4. このファイル/モジュールに置くべきコードか
 5. より適切な配置場所はないか
 
+## チェック項目（コンテキスト情報がある場合）
+
+1. このファイルの責務は、同じディレクトリの他ファイルと重複していないか
+2. 関連ファイルとの整合性は取れているか
+3. 依存方向は適切か（循環依存がないか）
+4. このファイルにあるべきコードか、別の場所が適切か
+5. public APIは最小限か
+
 ## 出力形式
 
-- 💡 アーキテクチャ改善の提案
-- ⚠ 設計上の問題
+- 💡 配置場所の改善提案
+- ⚠ 責務の重複・設計上の問題
+- 🔄 関連ファイルとの不整合
 - ✓ 構造上の問題なし"#;
+
+/// Architecture review prompt with context placeholder
+pub const ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT: &str = r#"以下のコードをアーキテクチャの観点からレビューしてください。
+
+{context}
+
+ファイル: {file_name}
+
+```
+{code}
+```
+
+## チェック項目（コンテキスト情報を踏まえて）
+
+1. このファイルの責務は、同じディレクトリの他ファイルと重複していないか
+2. 関連ファイル（一緒に変更されたファイル）との整合性は取れているか
+3. 依存方向は適切か（循環依存がないか）
+4. このファイルにあるべきコードか、別の場所が適切か
+5. public APIは最小限か
+
+## 出力形式
+
+- 💡 配置場所の改善提案
+- ⚠ 責務の重複・設計上の問題
+- 🔄 関連ファイルとの不整合
+- ✓ 構造上の問題なし"#;
+
+/// Build a prompt with context information
+pub fn build_prompt_with_context(
+    template: &str,
+    file_name: &str,
+    code: &str,
+    context: &str,
+) -> String {
+    template
+        .replace("{file_name}", file_name)
+        .replace("{code}", code)
+        .replace("{content}", &format!("{}\n\nファイル: {}\n\n```\n{}\n```", context, file_name, code))
+        .replace("{context}", context)
+}
 
 /// Build a prompt from template
 pub fn build_prompt(template: &str, file_name: &str, content: &str) -> String {
@@ -145,5 +194,19 @@ mod tests {
         assert!(!PromptType::Security.template().is_empty());
         assert!(!PromptType::Architecture.template().is_empty());
         assert!(PromptType::Custom.template().is_empty());
+    }
+
+    #[test]
+    fn test_build_prompt_with_context() {
+        let context = "## プロジェクト構造\nsrc/\n└── main.rs";
+        let prompt = build_prompt_with_context(
+            ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT,
+            "test.rs",
+            "fn main() {}",
+            context,
+        );
+        assert!(prompt.contains("test.rs"));
+        assert!(prompt.contains("fn main() {}"));
+        assert!(prompt.contains("プロジェクト構造"));
     }
 }

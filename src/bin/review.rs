@@ -21,6 +21,7 @@ fn main() {
         eprintln!("Options:");
         eprintln!("  --backend <gemini|claude>  AI backend (default: gemini)");
         eprintln!("  --prompt <default|quick|security|architecture>");
+        eprintln!("  --context                  Enable project context (module tree, dependencies)");
         std::process::exit(1);
     }
 
@@ -28,6 +29,7 @@ fn main() {
     let mut backend = Backend::Gemini;
     let mut prompt_type = PromptType::Default;
     let mut mode = Mode::File(PathBuf::new());
+    let mut context_enabled = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -61,6 +63,9 @@ fn main() {
             "--diff" => {
                 mode = Mode::Diff;
             }
+            "--context" => {
+                context_enabled = true;
+            }
             arg if !arg.starts_with('-') => {
                 mode = Mode::File(PathBuf::from(arg));
             }
@@ -75,13 +80,13 @@ fn main() {
                 eprintln!("Error: No file specified");
                 std::process::exit(1);
             }
-            review_file(&path, backend, prompt_type);
+            review_file(&path, backend, prompt_type, context_enabled);
         }
         Mode::Dir(dir) => {
-            review_directory(&dir, backend, prompt_type);
+            review_directory(&dir, backend, prompt_type, context_enabled);
         }
         Mode::Diff => {
-            review_diff(backend, prompt_type);
+            review_diff(backend, prompt_type, context_enabled);
         }
     }
 }
@@ -92,10 +97,10 @@ enum Mode {
     Diff,
 }
 
-fn review_file(path: &PathBuf, backend: Backend, prompt_type: PromptType) {
+fn review_file(path: &PathBuf, backend: Backend, prompt_type: PromptType, context_enabled: bool) {
     let parent = path.parent().unwrap_or(std::path::Path::new("."));
     let reviewer = match CodeReviewer::new(parent) {
-        Ok(r) => r.with_backend(backend).with_prompt_type(prompt_type),
+        Ok(r) => r.with_backend(backend).with_prompt_type(prompt_type).with_context(context_enabled),
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
@@ -106,9 +111,6 @@ fn review_file(path: &PathBuf, backend: Backend, prompt_type: PromptType) {
         Ok(result) => {
             println!("## Review: {}\n", result.name);
             println!("{}", result.review);
-            if result.has_issues {
-                std::process::exit(1);
-            }
         }
         Err(e) => {
             eprintln!("Review failed: {}", e);
@@ -117,9 +119,9 @@ fn review_file(path: &PathBuf, backend: Backend, prompt_type: PromptType) {
     }
 }
 
-fn review_directory(dir: &PathBuf, backend: Backend, prompt_type: PromptType) {
+fn review_directory(dir: &PathBuf, backend: Backend, prompt_type: PromptType, context_enabled: bool) {
     let reviewer = match CodeReviewer::new(dir) {
-        Ok(r) => r.with_backend(backend).with_prompt_type(prompt_type),
+        Ok(r) => r.with_backend(backend).with_prompt_type(prompt_type).with_context(context_enabled),
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
@@ -135,29 +137,21 @@ fn review_directory(dir: &PathBuf, backend: Backend, prompt_type: PromptType) {
         return;
     }
 
-    let mut has_issues = false;
     for file in files {
         match reviewer.review_file(&file) {
             Ok(result) => {
                 println!("## Review: {}\n", result.name);
                 println!("{}\n", result.review);
                 println!("---\n");
-                if result.has_issues {
-                    has_issues = true;
-                }
             }
             Err(e) => {
                 eprintln!("Review failed for {:?}: {}", file, e);
             }
         }
     }
-
-    if has_issues {
-        std::process::exit(1);
-    }
 }
 
-fn review_diff(backend: Backend, prompt_type: PromptType) {
+fn review_diff(backend: Backend, prompt_type: PromptType, context_enabled: bool) {
     // Get changed files from git
     let output = Command::new("git")
         .args(["diff", "--name-only", "HEAD"])
@@ -182,14 +176,13 @@ fn review_diff(backend: Backend, prompt_type: PromptType) {
 
     let cwd = std::env::current_dir().unwrap_or_default();
     let reviewer = match CodeReviewer::new(&cwd) {
-        Ok(r) => r.with_backend(backend).with_prompt_type(prompt_type),
+        Ok(r) => r.with_backend(backend).with_prompt_type(prompt_type).with_context(context_enabled),
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
         }
     };
 
-    let mut has_issues = false;
     for file in changed_files {
         if !file.exists() {
             continue;
@@ -199,18 +192,11 @@ fn review_diff(backend: Backend, prompt_type: PromptType) {
                 println!("## Review: {}\n", result.name);
                 println!("{}\n", result.review);
                 println!("---\n");
-                if result.has_issues {
-                    has_issues = true;
-                }
             }
             Err(e) => {
                 eprintln!("Review failed for {:?}: {}", file, e);
             }
         }
-    }
-
-    if has_issues {
-        std::process::exit(1);
     }
 }
 

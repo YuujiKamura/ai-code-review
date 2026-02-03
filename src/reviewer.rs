@@ -11,19 +11,29 @@ use std::time::Instant;
 use cli_ai_analyzer::{prompt as ai_prompt, AnalyzeOptions, Backend};
 use folder_watcher::FolderWatcher;
 
+use crate::context::gather_context;
 use crate::error::{CodeReviewError, Result};
 use crate::git::get_git_diff;
-use crate::prompt::{build_prompt, PromptType, DEFAULT_REVIEW_PROMPT};
+use crate::prompt::{build_prompt, build_prompt_with_context, PromptType, DEFAULT_REVIEW_PROMPT};
 use crate::result::ReviewResult;
+
+/// Configuration for review execution
+#[derive(Clone)]
+pub(crate) struct ReviewConfig {
+    pub backend: Backend,
+    pub model: Option<String>,
+    pub prompt_template: String,
+    pub context_enabled: bool,
+    pub context_depth: usize,
+}
 
 /// Core review logic - performs AI-powered code review on a file
 ///
 /// This is the shared implementation used by both `review_file` and the `on_modify` callback.
-fn perform_review(
+pub(crate) fn perform_review(
     path: &Path,
-    prompt_template: &str,
-    backend: Backend,
-    model: Option<&str>,
+    config: &ReviewConfig,
+    base_path: Option<&Path>,
 ) -> Result<ReviewResult> {
     // Get content (git diff or file content)
     let content = get_git_diff(path)
@@ -48,13 +58,25 @@ fn perform_review(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
-    let prompt = build_prompt(prompt_template, &file_name, &content);
+    // Gather context if enabled
+    let prompt = if config.context_enabled {
+        let base = base_path.unwrap_or_else(|| path.parent().unwrap_or(Path::new(".")));
+        match gather_context(path, base, config.context_depth) {
+            Ok(ctx) if !ctx.is_empty() => {
+                let context_str = ctx.to_prompt_string();
+                build_prompt_with_context(&config.prompt_template, &file_name, &content, &context_str)
+            }
+            _ => build_prompt(&config.prompt_template, &file_name, &content),
+        }
+    } else {
+        build_prompt(&config.prompt_template, &file_name, &content)
+    };
 
     // Run the review
-    let options = if let Some(m) = model {
-        AnalyzeOptions::with_model(m).with_backend(backend)
+    let options = if let Some(ref m) = config.model {
+        AnalyzeOptions::with_model(m).with_backend(config.backend)
     } else {
-        AnalyzeOptions::default().with_backend(backend)
+        AnalyzeOptions::default().with_backend(config.backend)
     };
 
     let review = ai_prompt(&prompt, options)?;
@@ -70,9 +92,13 @@ const DEFAULT_EXTENSIONS: &[&str] = &["rs", "ts", "tsx", "js", "jsx", "py", "go"
 /// Type alias for review callback
 type ReviewCallback = Box<dyn Fn(ReviewResult) + Send + Sync + 'static>;
 
-/// Internal state for debouncing
-struct ReviewerState {
+/// State for debouncing reviews
+struct DebounceState {
     last_review: HashMap<PathBuf, Instant>,
+}
+
+/// State for logging
+struct LoggingState {
     log_path: Option<PathBuf>,
 }
 
@@ -92,14 +118,20 @@ pub struct CodeReviewer {
     prompt_type: PromptType,
     /// Debounce duration in milliseconds
     debounce_ms: u64,
+    /// Whether context gathering is enabled
+    context_enabled: bool,
+    /// Depth limit for context gathering
+    context_depth: usize,
     /// Callback for review results
     on_review: Option<Arc<ReviewCallback>>,
     /// Internal watcher
     watcher: Option<FolderWatcher>,
     /// Running state
     running: Arc<AtomicBool>,
-    /// Internal state
-    state: Arc<Mutex<ReviewerState>>,
+    /// State for debouncing
+    debounce_state: Arc<Mutex<DebounceState>>,
+    /// State for logging
+    logging_state: Arc<Mutex<LoggingState>>,
 }
 
 impl CodeReviewer {
@@ -120,11 +152,15 @@ impl CodeReviewer {
             prompt_template: DEFAULT_REVIEW_PROMPT.to_string(),
             prompt_type: PromptType::Default,
             debounce_ms: DEFAULT_DEBOUNCE_MS,
+            context_enabled: false,
+            context_depth: 50,
             on_review: None,
             watcher: None,
             running: Arc::new(AtomicBool::new(false)),
-            state: Arc::new(Mutex::new(ReviewerState {
+            debounce_state: Arc::new(Mutex::new(DebounceState {
                 last_review: HashMap::new(),
+            })),
+            logging_state: Arc::new(Mutex::new(LoggingState {
                 log_path: None,
             })),
         })
@@ -170,12 +206,24 @@ impl CodeReviewer {
         self
     }
 
+    /// Enable or disable context gathering
+    pub fn with_context(mut self, enabled: bool) -> Self {
+        self.context_enabled = enabled;
+        self
+    }
+
+    /// Set the context gathering depth limit
+    pub fn with_context_depth(mut self, depth: usize) -> Self {
+        self.context_depth = depth;
+        self
+    }
+
     /// Set a log file path for review results
     pub fn with_log_file(self, path: impl Into<PathBuf>) -> Self {
         let log_path = path.into();
-        self.state
+        self.logging_state
             .lock()
-            .expect("Failed to acquire state lock")
+            .expect("Failed to acquire logging state lock")
             .log_path = Some(log_path);
         self
     }
@@ -206,12 +254,18 @@ impl CodeReviewer {
         }
 
         let extensions = self.extensions.clone();
-        let backend = self.backend;
-        let model = self.model.clone();
-        let prompt_template = self.prompt_template.clone();
+        let review_config = ReviewConfig {
+            backend: self.backend,
+            model: self.model.clone(),
+            prompt_template: self.prompt_template.clone(),
+            context_enabled: self.context_enabled,
+            context_depth: self.context_depth,
+        };
         let debounce_ms = self.debounce_ms;
+        let base_path = self.path.clone();
         let on_review = self.on_review.clone();
-        let state = self.state.clone();
+        let debounce_state = self.debounce_state.clone();
+        let logging_state = self.logging_state.clone();
         let running = self.running.clone();
 
         // Create the folder watcher
@@ -220,13 +274,13 @@ impl CodeReviewer {
         let watcher = FolderWatcher::new(&self.path)?
             .with_filter(&ext_refs)
             .on_modify(move |path| {
-                if !check_debounce(path, &state, debounce_ms) {
+                if !check_debounce(path, &debounce_state, debounce_ms) {
                     return;
                 }
                 if !running.load(Ordering::SeqCst) {
                     return;
                 }
-                handle_file_change(path, &prompt_template, backend, model.as_deref(), &state, &on_review);
+                handle_file_change(path, &review_config, &base_path, &logging_state, &on_review);
             });
 
         watcher.start()?;
@@ -254,7 +308,14 @@ impl CodeReviewer {
 
     /// Review a single file immediately (without watching)
     pub fn review_file(&self, path: &Path) -> Result<ReviewResult> {
-        perform_review(path, &self.prompt_template, self.backend, self.model.as_deref())
+        let config = ReviewConfig {
+            backend: self.backend,
+            model: self.model.clone(),
+            prompt_template: self.prompt_template.clone(),
+            context_enabled: self.context_enabled,
+            context_depth: self.context_depth,
+        };
+        perform_review(path, &config, Some(&self.path))
     }
 }
 
@@ -282,10 +343,10 @@ fn append_review_log(log_path: &Path, result: &ReviewResult) -> Result<()> {
 /// Returns `true` if review should proceed, `false` if debounced.
 fn check_debounce(
     path: &Path,
-    state: &Arc<Mutex<ReviewerState>>,
+    debounce_state: &Arc<Mutex<DebounceState>>,
     debounce_ms: u64,
 ) -> bool {
-    let mut state_lock = match state.lock() {
+    let mut state_lock = match debounce_state.lock() {
         Ok(s) => s,
         Err(_) => return false,
     };
@@ -302,11 +363,11 @@ fn check_debounce(
 /// Process review result - log to file and invoke callback
 fn process_review_result(
     result: ReviewResult,
-    state: &Arc<Mutex<ReviewerState>>,
+    logging_state: &Arc<Mutex<LoggingState>>,
     on_review: &Option<Arc<ReviewCallback>>,
 ) {
     // Write to log if configured
-    if let Ok(state_lock) = state.lock() {
+    if let Ok(state_lock) = logging_state.lock() {
         if let Some(ref log_path) = state_lock.log_path {
             let _ = append_review_log(log_path, &result);
         }
@@ -321,15 +382,14 @@ fn process_review_result(
 /// Handle file modification event - perform review and process result
 fn handle_file_change(
     path: &Path,
-    prompt_template: &str,
-    backend: Backend,
-    model: Option<&str>,
-    state: &Arc<Mutex<ReviewerState>>,
+    config: &ReviewConfig,
+    base_path: &Path,
+    logging_state: &Arc<Mutex<LoggingState>>,
     on_review: &Option<Arc<ReviewCallback>>,
 ) {
-    match perform_review(path, prompt_template, backend, model) {
+    match perform_review(path, config, Some(base_path)) {
         Ok(result) => {
-            process_review_result(result, state, on_review);
+            process_review_result(result, logging_state, on_review);
         }
         Err(e) => {
             log::error!("Review error for {:?}: {}", path, e);

@@ -80,6 +80,84 @@ pub fn get_git_root(path: &Path) -> Option<String> {
     }
 }
 
+/// Get files that were frequently changed together with the given file
+///
+/// Looks at the last N commits that touched this file and counts
+/// which other files were changed in the same commits.
+///
+/// # Arguments
+/// * `file_path` - The file to analyze
+/// * `lookback` - Number of commits to look back
+///
+/// # Returns
+/// A vector of (file_path, co_change_count) tuples, sorted by count descending
+pub fn get_cochanged_files(file_path: &Path, lookback: usize) -> Vec<(String, usize)> {
+    use std::collections::HashMap;
+
+    let file_str = file_path.to_string_lossy();
+    let parent = match file_path.parent() {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+
+    // Get commits that touched this file
+    let mut cmd = Command::new("git");
+    cmd.args(["log", "--format=%H", "-n", &lookback.to_string(), "--", &file_str])
+        .current_dir(parent);
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = match cmd.output() {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let commits: Vec<&str> = stdout
+        .lines()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .take(lookback)
+        .collect();
+
+    if commits.is_empty() {
+        return Vec::new();
+    }
+
+    // Count co-changed files across all commits
+    let mut file_counts: HashMap<String, usize> = HashMap::new();
+    let target_name = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+
+    for commit in commits {
+        let mut cmd2 = Command::new("git");
+        cmd2.args(["diff-tree", "--no-commit-id", "--name-only", "-r", commit])
+            .current_dir(parent);
+
+        #[cfg(target_os = "windows")]
+        cmd2.creation_flags(CREATE_NO_WINDOW);
+
+        if let Ok(output2) = cmd2.output() {
+            if output2.status.success() {
+                for line in String::from_utf8_lossy(&output2.stdout).lines() {
+                    let line = line.trim();
+                    if !line.is_empty() && !line.ends_with(target_name) {
+                        *file_counts.entry(line.to_string()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by count descending
+    let mut result: Vec<(String, usize)> = file_counts.into_iter().collect();
+    result.sort_by(|a, b| b.1.cmp(&a.1));
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,5 +169,14 @@ mod tests {
         let current = PathBuf::from(".");
         // This may or may not be true depending on where tests are run
         let _ = is_git_repo(&current);
+    }
+
+    #[test]
+    fn test_get_cochanged_files() {
+        // Test that it doesn't panic even if not in a git repo
+        let path = PathBuf::from("./Cargo.toml");
+        let result = get_cochanged_files(&path, 10);
+        // Result may be empty if not in a git repo, that's fine
+        let _ = result;
     }
 }

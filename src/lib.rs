@@ -58,11 +58,16 @@
 //! println!("{}", result.review);
 //! ```
 
+mod analyzer;
+mod context;
 mod error;
 mod git;
+mod modules;
+mod parser;
 mod prompt;
 mod result;
 mod reviewer;
+mod utils;
 
 /// Re-export of `Backend` from `cli_ai_analyzer` for convenience.
 ///
@@ -77,10 +82,15 @@ mod reviewer;
 /// use ai_code_review::{CodeReviewer, Backend};
 /// ```
 pub use cli_ai_analyzer::Backend;
+pub use context::{gather_context, gather_context_default, DependencyInfo, ProjectContext, RelatedFile};
 pub use error::{CodeReviewError, Result};
+pub use analyzer::find_importers;
+pub use modules::{generate_module_tree, get_sibling_files};
+pub use parser::{analyze_file, FileAnalysis, ImportInfo};
 pub use prompt::{
-    build_prompt, PromptType, ARCHITECTURE_REVIEW_PROMPT, DEFAULT_REVIEW_PROMPT,
-    QUICK_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT,
+    build_prompt, build_prompt_with_context, PromptType, ARCHITECTURE_REVIEW_PROMPT,
+    ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT, DEFAULT_REVIEW_PROMPT, QUICK_REVIEW_PROMPT,
+    SECURITY_REVIEW_PROMPT,
 };
 pub use result::{ReviewResult, ReviewSeverity, ReviewSummary};
 pub use reviewer::CodeReviewer;
@@ -159,5 +169,16 @@ mod tests {
         let prompt = build_prompt(QUICK_REVIEW_PROMPT, "main.rs", "fn main() {}");
         assert!(prompt.contains("main.rs"));
         assert!(prompt.contains("fn main() {}"));
+    }
+
+    #[test]
+    fn test_context_builder() {
+        let dir = tempdir().unwrap();
+        let reviewer = CodeReviewer::new(dir.path())
+            .unwrap()
+            .with_context(true)
+            .with_context_depth(100);
+
+        assert!(!reviewer.is_running());
     }
 }
