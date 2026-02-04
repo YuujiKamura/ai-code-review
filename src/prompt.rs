@@ -100,6 +100,98 @@ pub const ARCHITECTURE_REVIEW_PROMPT: &str = r#"以下のコードをアーキ�
 - 🔄 関連ファイルとの不整合
 - ✓ 構造上の問題なし"#;
 
+/// Analyze prompt - let AI analyze code structure and patterns
+pub const ANALYZE_PROMPT: &str = r#"以下のコードを分析してください。
+
+{context}
+
+## 分析してほしいこと
+
+1. **このコードは何をしているか** - 目的と責務
+2. **依存関係** - 何をimport/使用しているか、何から使用されているか
+3. **設計パターン** - 使われているパターン、または使うべきパターン
+4. **改善点** - 構造上の問題、リファクタリングの余地
+
+簡潔に回答してください。
+"#;
+
+/// Discovery prompt - helps expand project from goal to architecture
+pub const DISCOVERY_PROMPT: &str = r#"以下のプロジェクトについて、目的からアーキテクチャへの展開を支援してください。
+
+## 目的
+{goal}
+
+## 現在の構造
+{structure}
+
+## 分析してほしいこと
+
+1. **責務の発見**
+   - この目的を達成するために必要な責務は何か
+   - それぞれの責務は独立しているか、依存関係はあるか
+
+2. **境界の設計**
+   - モジュール/ファイルとしてどう分割すべきか
+   - 入力・処理・出力の境界はどこか
+   - 外部との接点（API、CLI、ファイル等）はどこか
+
+3. **不足の指摘**
+   - 現在の構造に足りないものは何か
+   - 追加すべきモジュール/ファイルは何か
+
+4. **次のステップ**
+   - 今すぐやるべきことは何か（1-3個）
+   - 後回しにしていいことは何か
+
+## 出力形式
+
+### 責務マップ
+```
+責務A: 説明
+  → 配置先: src/xxx.rs
+責務B: 説明
+  → 配置先: src/yyy.rs
+```
+
+### 推奨構造
+```
+src/
+├── ...
+```
+
+### 次のアクション
+1. ...
+2. ...
+"#;
+
+/// Holistic review prompt - checks code against project requirements
+pub const HOLISTIC_REVIEW_PROMPT: &str = r#"以下のコードを、プロジェクト全体の文脈からレビューしてください。
+
+{content}
+
+## チェック項目
+
+1. **要件との整合性**
+   - コードはプロジェクトの目的に沿っているか
+   - 命名はドメイン用語と一致しているか
+   - 欠けている機能はないか
+
+2. **表現の適切さ**
+   - このコードは意図を明確に表現しているか
+   - 抽象化レベルは適切か（技術詳細 vs ビジネスロジック）
+   - 他の開発者が読んで目的を理解できるか
+
+3. **プロジェクト構造との調和**
+   - このファイルの役割は明確か
+   - 他のモジュールとの責務分担は適切か
+
+## 出力形式
+
+- 💡 表現改善の提案
+- ⚠ 要件との乖離
+- 🎯 目的との整合性の問題
+- ✓ 問題なし"#;
+
 /// Architecture review prompt with context placeholder
 pub const ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT: &str = r#"以下のコードをアーキテクチャの観点からレビューしてください。
 
@@ -147,6 +239,18 @@ pub fn build_prompt(template: &str, file_name: &str, content: &str) -> String {
         .replace("{content}", content)
 }
 
+/// Build a discovery prompt with goal and project structure
+pub fn build_discovery_prompt(template: &str, goal: &str, structure: &str) -> String {
+    template
+        .replace("{goal}", goal)
+        .replace("{structure}", structure)
+}
+
+/// Build an analyze prompt with raw context
+pub fn build_analyze_prompt(template: &str, context: &str) -> String {
+    template.replace("{context}", context)
+}
+
 /// Prompt type for easy selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PromptType {
@@ -159,6 +263,12 @@ pub enum PromptType {
     Security,
     /// Architecture-focused review
     Architecture,
+    /// Holistic review - checks code against project requirements
+    Holistic,
+    /// Discovery - helps expand project from goal to architecture
+    Discovery,
+    /// Analyze - let AI analyze code structure (minimal parsing, AI does the work)
+    Analyze,
     /// Custom prompt
     Custom,
 }
@@ -171,8 +281,21 @@ impl PromptType {
             PromptType::Quick => QUICK_REVIEW_PROMPT,
             PromptType::Security => SECURITY_REVIEW_PROMPT,
             PromptType::Architecture => ARCHITECTURE_REVIEW_PROMPT,
+            PromptType::Holistic => HOLISTIC_REVIEW_PROMPT,
+            PromptType::Discovery => DISCOVERY_PROMPT,
+            PromptType::Analyze => ANALYZE_PROMPT,
             PromptType::Custom => "", // Custom prompts provide their own template
         }
+    }
+
+    /// Check if this prompt type requires a goal instead of file content
+    pub fn requires_goal(&self) -> bool {
+        matches!(self, PromptType::Discovery)
+    }
+
+    /// Check if this prompt type uses raw context (AI does the parsing)
+    pub fn uses_raw_context(&self) -> bool {
+        matches!(self, PromptType::Analyze | PromptType::Discovery)
     }
 }
 
@@ -193,6 +316,7 @@ mod tests {
         assert!(!PromptType::Quick.template().is_empty());
         assert!(!PromptType::Security.template().is_empty());
         assert!(!PromptType::Architecture.template().is_empty());
+        assert!(!PromptType::Holistic.template().is_empty());
         assert!(PromptType::Custom.template().is_empty());
     }
 

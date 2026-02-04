@@ -17,6 +17,51 @@ use crate::git::get_git_diff;
 use crate::prompt::{build_prompt, build_prompt_with_context, PromptType, DEFAULT_REVIEW_PROMPT};
 use crate::result::ReviewResult;
 
+/// Build the review prompt for a file, handling context gathering and prompt construction.
+///
+/// This helper function encapsulates the prompt building logic:
+/// 1. Extracts the file name from the path
+/// 2. Gathers project context if enabled in config
+/// 3. Builds the final prompt using the appropriate template
+///
+/// # Arguments
+/// * `path` - Path to the file being reviewed
+/// * `content` - The content to review (git diff or file content)
+/// * `config` - Review configuration containing prompt template and context settings
+/// * `base_path` - Optional base path for context gathering (defaults to file's parent)
+///
+/// # Returns
+/// The fully constructed prompt string ready to send to the AI
+fn build_review_prompt(
+    path: &Path,
+    content: &str,
+    config: &ReviewConfig,
+    base_path: Option<&Path>,
+) -> String {
+    // Extract file name
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Determine base path for context gathering
+    let base = base_path.unwrap_or_else(|| path.parent().unwrap_or(Path::new(".")));
+
+    // Gather context if enabled
+    let context_str = config
+        .context_enabled
+        .then(|| gather_context(path, base, config.context_depth).ok())
+        .flatten()
+        .filter(|ctx| !ctx.is_empty())
+        .map(|ctx| ctx.to_prompt_string());
+
+    // Build prompt with or without context
+    match context_str {
+        Some(ctx) => build_prompt_with_context(&config.prompt_template, &file_name, content, &ctx),
+        None => build_prompt(&config.prompt_template, &file_name, content),
+    }
+}
+
 /// Configuration for review execution
 #[derive(Clone)]
 pub(crate) struct ReviewConfig {
@@ -52,25 +97,8 @@ pub(crate) fn perform_review(
         )));
     }
 
-    // Build the prompt
-    let file_name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-
-    // Gather context if enabled
-    let prompt = if config.context_enabled {
-        let base = base_path.unwrap_or_else(|| path.parent().unwrap_or(Path::new(".")));
-        match gather_context(path, base, config.context_depth) {
-            Ok(ctx) if !ctx.is_empty() => {
-                let context_str = ctx.to_prompt_string();
-                build_prompt_with_context(&config.prompt_template, &file_name, &content, &context_str)
-            }
-            _ => build_prompt(&config.prompt_template, &file_name, &content),
-        }
-    } else {
-        build_prompt(&config.prompt_template, &file_name, &content)
-    };
+    // Build the prompt using the helper function
+    let prompt = build_review_prompt(path, &content, config, base_path);
 
     // Run the review
     let options = if let Some(ref m) = config.model {
@@ -92,13 +120,9 @@ const DEFAULT_EXTENSIONS: &[&str] = &["rs", "ts", "tsx", "js", "jsx", "py", "go"
 /// Type alias for review callback
 type ReviewCallback = Box<dyn Fn(ReviewResult) + Send + Sync + 'static>;
 
-/// State for debouncing reviews
-struct DebounceState {
+/// Consolidated shared state for debouncing and logging
+struct SharedState {
     last_review: HashMap<PathBuf, Instant>,
-}
-
-/// State for logging
-struct LoggingState {
     log_path: Option<PathBuf>,
 }
 
@@ -106,32 +130,22 @@ struct LoggingState {
 pub struct CodeReviewer {
     /// Path to watch
     path: PathBuf,
-    /// AI backend to use
-    backend: Backend,
-    /// Model to use (optional, uses backend default if not set)
-    model: Option<String>,
+    /// Review configuration (backend, model, prompt, context settings)
+    config: Arc<ReviewConfig>,
     /// File extensions to watch
     extensions: Vec<String>,
-    /// Custom prompt template
-    prompt_template: String,
-    /// Prompt type
+    /// Prompt type (used for builder logic)
     prompt_type: PromptType,
     /// Debounce duration in milliseconds
     debounce_ms: u64,
-    /// Whether context gathering is enabled
-    context_enabled: bool,
-    /// Depth limit for context gathering
-    context_depth: usize,
     /// Callback for review results
     on_review: Option<Arc<ReviewCallback>>,
     /// Internal watcher
     watcher: Option<FolderWatcher>,
     /// Running state
     running: Arc<AtomicBool>,
-    /// State for debouncing
-    debounce_state: Arc<Mutex<DebounceState>>,
-    /// State for logging
-    logging_state: Arc<Mutex<LoggingState>>,
+    /// Consolidated shared state for debouncing and logging
+    shared_state: Arc<Mutex<SharedState>>,
 }
 
 impl CodeReviewer {
@@ -146,21 +160,21 @@ impl CodeReviewer {
 
         Ok(Self {
             path: path.to_path_buf(),
-            backend: Backend::default(),
-            model: None,
+            config: Arc::new(ReviewConfig {
+                backend: Backend::default(),
+                model: None,
+                prompt_template: DEFAULT_REVIEW_PROMPT.to_string(),
+                context_enabled: false,
+                context_depth: 50,
+            }),
             extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
-            prompt_template: DEFAULT_REVIEW_PROMPT.to_string(),
             prompt_type: PromptType::Default,
             debounce_ms: DEFAULT_DEBOUNCE_MS,
-            context_enabled: false,
-            context_depth: 50,
             on_review: None,
             watcher: None,
             running: Arc::new(AtomicBool::new(false)),
-            debounce_state: Arc::new(Mutex::new(DebounceState {
+            shared_state: Arc::new(Mutex::new(SharedState {
                 last_review: HashMap::new(),
-            })),
-            logging_state: Arc::new(Mutex::new(LoggingState {
                 log_path: None,
             })),
         })
@@ -168,13 +182,13 @@ impl CodeReviewer {
 
     /// Set the AI backend to use
     pub fn with_backend(mut self, backend: Backend) -> Self {
-        self.backend = backend;
+        Arc::make_mut(&mut self.config).backend = backend;
         self
     }
 
     /// Set a specific model to use
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
-        self.model = Some(model.into());
+        Arc::make_mut(&mut self.config).model = Some(model.into());
         self
     }
 
@@ -186,7 +200,7 @@ impl CodeReviewer {
 
     /// Set a custom prompt template
     pub fn with_prompt(mut self, template: impl Into<String>) -> Self {
-        self.prompt_template = template.into();
+        Arc::make_mut(&mut self.config).prompt_template = template.into();
         self.prompt_type = PromptType::Custom;
         self
     }
@@ -195,7 +209,7 @@ impl CodeReviewer {
     pub fn with_prompt_type(mut self, prompt_type: PromptType) -> Self {
         self.prompt_type = prompt_type;
         if prompt_type != PromptType::Custom {
-            self.prompt_template = prompt_type.template().to_string();
+            Arc::make_mut(&mut self.config).prompt_template = prompt_type.template().to_string();
         }
         self
     }
@@ -208,24 +222,31 @@ impl CodeReviewer {
 
     /// Enable or disable context gathering
     pub fn with_context(mut self, enabled: bool) -> Self {
-        self.context_enabled = enabled;
+        Arc::make_mut(&mut self.config).context_enabled = enabled;
         self
     }
 
     /// Set the context gathering depth limit
     pub fn with_context_depth(mut self, depth: usize) -> Self {
-        self.context_depth = depth;
+        Arc::make_mut(&mut self.config).context_depth = depth;
         self
     }
 
     /// Set a log file path for review results
-    pub fn with_log_file(self, path: impl Into<PathBuf>) -> Self {
+    ///
+    /// Returns an error if the shared state lock is poisoned.
+    pub fn with_log_file(self, path: impl Into<PathBuf>) -> Result<Self> {
         let log_path = path.into();
-        self.logging_state
+        self.shared_state
             .lock()
-            .expect("Failed to acquire logging state lock")
+            .map_err(|_| {
+                CodeReviewError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to acquire shared state lock",
+                ))
+            })?
             .log_path = Some(log_path);
-        self
+        Ok(self)
     }
 
     /// Set callback for when a review completes
@@ -254,19 +275,12 @@ impl CodeReviewer {
         }
 
         let extensions = self.extensions.clone();
-        let review_config = ReviewConfig {
-            backend: self.backend,
-            model: self.model.clone(),
-            prompt_template: self.prompt_template.clone(),
-            context_enabled: self.context_enabled,
-            context_depth: self.context_depth,
-        };
+        let review_config = Arc::clone(&self.config);
         let debounce_ms = self.debounce_ms;
         let base_path = self.path.clone();
         let on_review = self.on_review.clone();
-        let debounce_state = self.debounce_state.clone();
-        let logging_state = self.logging_state.clone();
-        let running = self.running.clone();
+        let shared_state = Arc::clone(&self.shared_state);
+        let running = Arc::clone(&self.running);
 
         // Create the folder watcher
         let ext_refs: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
@@ -274,13 +288,13 @@ impl CodeReviewer {
         let watcher = FolderWatcher::new(&self.path)?
             .with_filter(&ext_refs)
             .on_modify(move |path| {
-                if !check_debounce(path, &debounce_state, debounce_ms) {
+                if !check_debounce(path, &shared_state, debounce_ms) {
                     return;
                 }
                 if !running.load(Ordering::SeqCst) {
                     return;
                 }
-                handle_file_change(path, &review_config, &base_path, &logging_state, &on_review);
+                handle_file_change(path, &review_config, &base_path, &shared_state, &on_review);
             });
 
         watcher.start()?;
@@ -308,14 +322,7 @@ impl CodeReviewer {
 
     /// Review a single file immediately (without watching)
     pub fn review_file(&self, path: &Path) -> Result<ReviewResult> {
-        let config = ReviewConfig {
-            backend: self.backend,
-            model: self.model.clone(),
-            prompt_template: self.prompt_template.clone(),
-            context_enabled: self.context_enabled,
-            context_depth: self.context_depth,
-        };
-        perform_review(path, &config, Some(&self.path))
+        perform_review(path, &self.config, Some(&self.path))
     }
 }
 
@@ -343,12 +350,15 @@ fn append_review_log(log_path: &Path, result: &ReviewResult) -> Result<()> {
 /// Returns `true` if review should proceed, `false` if debounced.
 fn check_debounce(
     path: &Path,
-    debounce_state: &Arc<Mutex<DebounceState>>,
+    shared_state: &Arc<Mutex<SharedState>>,
     debounce_ms: u64,
 ) -> bool {
-    let mut state_lock = match debounce_state.lock() {
+    let mut state_lock = match shared_state.lock() {
         Ok(s) => s,
-        Err(_) => return false,
+        Err(e) => {
+            log::error!("Failed to acquire shared state lock: {}", e);
+            return false;
+        }
     };
     let now = Instant::now();
     if let Some(last) = state_lock.last_review.get(path) {
@@ -363,13 +373,18 @@ fn check_debounce(
 /// Process review result - log to file and invoke callback
 fn process_review_result(
     result: ReviewResult,
-    logging_state: &Arc<Mutex<LoggingState>>,
+    shared_state: &Arc<Mutex<SharedState>>,
     on_review: &Option<Arc<ReviewCallback>>,
 ) {
     // Write to log if configured
-    if let Ok(state_lock) = logging_state.lock() {
-        if let Some(ref log_path) = state_lock.log_path {
-            let _ = append_review_log(log_path, &result);
+    match shared_state.lock() {
+        Ok(state_lock) => {
+            if let Some(ref log_path) = state_lock.log_path {
+                let _ = append_review_log(log_path, &result);
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to acquire shared state lock: {}", e);
         }
     }
 
@@ -382,14 +397,14 @@ fn process_review_result(
 /// Handle file modification event - perform review and process result
 fn handle_file_change(
     path: &Path,
-    config: &ReviewConfig,
+    config: &Arc<ReviewConfig>,
     base_path: &Path,
-    logging_state: &Arc<Mutex<LoggingState>>,
+    shared_state: &Arc<Mutex<SharedState>>,
     on_review: &Option<Arc<ReviewCallback>>,
 ) {
-    match perform_review(path, config, Some(base_path)) {
+    match perform_review(path, config.as_ref(), Some(base_path)) {
         Ok(result) => {
-            process_review_result(result, logging_state, on_review);
+            process_review_result(result, shared_state, on_review);
         }
         Err(e) => {
             log::error!("Review error for {:?}: {}", path, e);
@@ -425,8 +440,44 @@ mod tests {
             .with_debounce(1000)
             .with_prompt_type(PromptType::Quick);
 
-        assert_eq!(reviewer.backend, Backend::Claude);
+        assert_eq!(reviewer.config.backend, Backend::Claude);
         assert_eq!(reviewer.extensions, vec!["rs", "py"]);
         assert_eq!(reviewer.debounce_ms, 1000);
+    }
+
+    #[test]
+    fn test_build_review_prompt_without_context() {
+        let config = ReviewConfig {
+            backend: Backend::default(),
+            model: None,
+            prompt_template: "Review {file_name}: {content}".to_string(),
+            context_enabled: false,
+            context_depth: 50,
+        };
+        let path = Path::new("/test/example.rs");
+        let content = "fn main() {}";
+
+        let prompt = build_review_prompt(path, content, &config, None);
+
+        assert!(prompt.contains("example.rs"));
+        assert!(prompt.contains("fn main() {}"));
+    }
+
+    #[test]
+    fn test_build_review_prompt_unknown_filename() {
+        let config = ReviewConfig {
+            backend: Backend::default(),
+            model: None,
+            prompt_template: "Review {file_name}: {content}".to_string(),
+            context_enabled: false,
+            context_depth: 50,
+        };
+        // Path with no file name component
+        let path = Path::new("/");
+        let content = "test content";
+
+        let prompt = build_review_prompt(path, content, &config, None);
+
+        assert!(prompt.contains("unknown"));
     }
 }

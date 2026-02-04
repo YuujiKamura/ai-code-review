@@ -60,6 +60,7 @@
 
 mod analyzer;
 mod context;
+mod context_simple;
 mod error;
 mod git;
 mod modules;
@@ -82,14 +83,19 @@ mod utils;
 /// use ai_code_review::{CodeReviewer, Backend};
 /// ```
 pub use cli_ai_analyzer::Backend;
-pub use context::{gather_context, gather_context_default, DependencyInfo, ProjectContext, RelatedFile};
+pub use context::{
+    gather_context, gather_context_default, gather_requirements, DependencyInfo, ProjectContext,
+    RelatedFile, RequirementsContext,
+};
+pub use context_simple::{gather_raw_context, RawContext};
 pub use error::{CodeReviewError, Result};
 pub use analyzer::find_importers;
 pub use modules::{generate_module_tree, get_sibling_files};
 pub use parser::{analyze_file, FileAnalysis, ImportInfo};
 pub use prompt::{
-    build_prompt, build_prompt_with_context, PromptType, ARCHITECTURE_REVIEW_PROMPT,
-    ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT, DEFAULT_REVIEW_PROMPT, QUICK_REVIEW_PROMPT,
+    build_analyze_prompt, build_discovery_prompt, build_prompt, build_prompt_with_context,
+    PromptType, ANALYZE_PROMPT, ARCHITECTURE_REVIEW_PROMPT, ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT,
+    DEFAULT_REVIEW_PROMPT, DISCOVERY_PROMPT, HOLISTIC_REVIEW_PROMPT, QUICK_REVIEW_PROMPT,
     SECURITY_REVIEW_PROMPT,
 };
 pub use result::{ReviewResult, ReviewSeverity, ReviewSummary};

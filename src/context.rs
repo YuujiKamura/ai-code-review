@@ -4,6 +4,8 @@
 //! better architectural insights during code review.
 
 use std::fmt::Write as FmtWrite;
+use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use crate::analyzer::find_importers;
@@ -11,6 +13,17 @@ use crate::error::Result;
 use crate::git::get_cochanged_files;
 use crate::modules::{generate_module_tree, get_sibling_files};
 use crate::parser::analyze_file;
+
+/// Project requirements and documentation context
+#[derive(Debug, Clone, Default)]
+pub struct RequirementsContext {
+    /// Project description from Cargo.toml or package.json
+    pub description: Option<String>,
+    /// README content (truncated if too long)
+    pub readme_summary: Option<String>,
+    /// Doc comments from lib.rs or main entry point
+    pub module_docs: Option<String>,
+}
 
 /// Information about a file that's frequently changed together with the target
 #[derive(Debug, Clone)]
@@ -41,6 +54,8 @@ pub struct ProjectContext {
     pub dependencies: DependencyInfo,
     /// Sibling files (in the same directory)
     pub sibling_files: Vec<String>,
+    /// Project requirements and documentation context
+    pub requirements: RequirementsContext,
 }
 
 impl ProjectContext {
@@ -51,12 +66,34 @@ impl ProjectContext {
             related_files: Vec::new(),
             dependencies: DependencyInfo::default(),
             sibling_files: Vec::new(),
+            requirements: RequirementsContext::default(),
         }
     }
 
     /// Format context as a prompt-friendly string
     pub fn to_prompt_string(&self) -> String {
         let mut output = String::new();
+
+        // Project description (from requirements)
+        if let Some(ref desc) = self.requirements.description {
+            output.push_str("## プロジェクト概要\n");
+            output.push_str(desc);
+            output.push_str("\n\n");
+        }
+
+        // README summary (from requirements)
+        if let Some(ref readme) = self.requirements.readme_summary {
+            output.push_str("## README（抜粋）\n");
+            output.push_str(readme);
+            output.push_str("\n\n");
+        }
+
+        // Module docs (from requirements)
+        if let Some(ref docs) = self.requirements.module_docs {
+            output.push_str("## モジュールドキュメント\n");
+            output.push_str(docs);
+            output.push_str("\n\n");
+        }
 
         // Module structure
         if !self.module_tree.is_empty() {
@@ -107,7 +144,88 @@ impl ProjectContext {
             && self.dependencies.imports.is_empty()
             && self.dependencies.imported_by.is_empty()
             && self.sibling_files.is_empty()
+            && self.requirements.description.is_none()
+            && self.requirements.readme_summary.is_none()
+            && self.requirements.module_docs.is_none()
     }
+}
+
+/// Gather project requirements context from README, Cargo.toml, etc.
+///
+/// # Arguments
+/// * `base_path` - The project root directory
+///
+/// # Returns
+/// A `RequirementsContext` containing project description, README summary, and module docs
+pub fn gather_requirements(base_path: &Path) -> RequirementsContext {
+    let mut ctx = RequirementsContext::default();
+
+    // 1. Get description from Cargo.toml
+    let cargo_path = base_path.join("Cargo.toml");
+    if cargo_path.exists() {
+        if let Ok(content) = fs::read_to_string(&cargo_path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("description") {
+                    // Extract value from: description = "..."
+                    if let Some(start) = trimmed.find('"') {
+                        if let Some(end) = trimmed.rfind('"') {
+                            if start < end {
+                                ctx.description = Some(trimmed[start + 1..end].to_string());
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // 2. Get README summary (first ~50 lines)
+    let readme_candidates = ["README.md", "README.markdown", "README.txt", "README"];
+    for readme_name in readme_candidates {
+        let readme_path = base_path.join(readme_name);
+        if readme_path.exists() {
+            if let Ok(file) = fs::File::open(&readme_path) {
+                let reader = BufReader::new(file);
+                let lines: Vec<String> = reader
+                    .lines()
+                    .take(50)
+                    .filter_map(|l| l.ok())
+                    .collect();
+                if !lines.is_empty() {
+                    ctx.readme_summary = Some(lines.join("\n"));
+                }
+            }
+            break;
+        }
+    }
+
+    // 3. Get doc comments from lib.rs
+    let lib_path = base_path.join("src").join("lib.rs");
+    if lib_path.exists() {
+        if let Ok(content) = fs::read_to_string(&lib_path) {
+            let mut doc_lines = Vec::new();
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("//!") {
+                    // Remove the "//! " or "//!" prefix
+                    let doc_content = trimmed
+                        .strip_prefix("//! ")
+                        .unwrap_or(trimmed.strip_prefix("//!").unwrap_or(""));
+                    doc_lines.push(doc_content.to_string());
+                } else if !trimmed.is_empty() && !trimmed.starts_with("//") {
+                    // Stop at first non-doc-comment, non-empty line
+                    break;
+                }
+            }
+            if !doc_lines.is_empty() {
+                ctx.module_docs = Some(doc_lines.join("\n"));
+            }
+        }
+    }
+
+    ctx
 }
 
 /// Gather all context information for a file
@@ -161,11 +279,15 @@ pub fn gather_context(file_path: &Path, base_path: &Path, lookback: usize) -> Re
     // Get sibling files
     let sibling_files = get_sibling_files(file_path);
 
+    // Gather project requirements
+    let requirements = gather_requirements(base_path);
+
     Ok(ProjectContext {
         module_tree,
         related_files,
         dependencies,
         sibling_files,
+        requirements,
     })
 }
 
@@ -199,6 +321,7 @@ mod tests {
                 imported_by: vec!["main.rs".to_string()],
             },
             sibling_files: vec!["other.rs".to_string()],
+            requirements: RequirementsContext::default(),
         };
 
         let prompt = ctx.to_prompt_string();
@@ -216,5 +339,52 @@ mod tests {
         let result = gather_context(&file, &base, 10);
         // Should not error even if not a git repo
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_gather_requirements() {
+        // Test with current directory (ai-code-review project)
+        let base = PathBuf::from(".");
+        let req = gather_requirements(&base);
+
+        // Should find description from Cargo.toml
+        assert!(req.description.is_some());
+        assert!(req
+            .description
+            .as_ref()
+            .unwrap()
+            .contains("AI-powered code review"));
+
+        // Should find module docs from lib.rs
+        assert!(req.module_docs.is_some());
+    }
+
+    #[test]
+    fn test_requirements_in_prompt() {
+        let ctx = ProjectContext {
+            module_tree: String::new(),
+            related_files: Vec::new(),
+            dependencies: DependencyInfo::default(),
+            sibling_files: Vec::new(),
+            requirements: RequirementsContext {
+                description: Some("Test project description".to_string()),
+                readme_summary: Some("# Test README\n\nThis is a test.".to_string()),
+                module_docs: None,
+            },
+        };
+
+        let prompt = ctx.to_prompt_string();
+        assert!(prompt.contains("## プロジェクト概要"));
+        assert!(prompt.contains("Test project description"));
+        assert!(prompt.contains("## README（抜粋）"));
+        assert!(prompt.contains("# Test README"));
+    }
+
+    #[test]
+    fn test_requirements_context_default() {
+        let req = RequirementsContext::default();
+        assert!(req.description.is_none());
+        assert!(req.readme_summary.is_none());
+        assert!(req.module_docs.is_none());
     }
 }
