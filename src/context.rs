@@ -3,7 +3,6 @@
 //! This module collects project context information to provide
 //! better architectural insights during code review.
 
-use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -75,70 +74,11 @@ impl ProjectContext {
     }
 
     /// Format context as a prompt-friendly string
+    ///
+    /// Delegates to [`crate::prompt::format_project_context`] where
+    /// the presentation logic lives.
     pub fn to_prompt_string(&self) -> String {
-        let mut output = String::new();
-
-        // Project description (from requirements)
-        if let Some(ref desc) = self.requirements.description {
-            output.push_str("## プロジェクト概要\n");
-            output.push_str(desc);
-            output.push_str("\n\n");
-        }
-
-        // README summary (from requirements)
-        if let Some(ref readme) = self.requirements.readme_summary {
-            output.push_str("## README（抜粋）\n");
-            output.push_str(readme);
-            output.push_str("\n\n");
-        }
-
-        // Module docs (from requirements)
-        if let Some(ref docs) = self.requirements.module_docs {
-            output.push_str("## モジュールドキュメント\n");
-            output.push_str(docs);
-            output.push_str("\n\n");
-        }
-
-        // Module structure
-        if !self.module_tree.is_empty() {
-            output.push_str("## プロジェクト構造\n```\n");
-            output.push_str(&self.module_tree);
-            output.push_str("```\n\n");
-        }
-
-        // Related files (co-changed)
-        if !self.related_files.is_empty() {
-            output.push_str("## 最近一緒に変更されたファイル\n");
-            for rf in &self.related_files {
-                let _ = writeln!(output, "- {} ({}回)", rf.path, rf.co_change_count);
-            }
-            output.push('\n');
-        }
-
-        // Dependencies
-        if !self.dependencies.imports.is_empty() || !self.dependencies.imported_by.is_empty() {
-            output.push_str("## 依存関係\n");
-            if !self.dependencies.imports.is_empty() {
-                output.push_str("このファイルが使用: ");
-                output.push_str(&self.dependencies.imports.join(", "));
-                output.push('\n');
-            }
-            if !self.dependencies.imported_by.is_empty() {
-                output.push_str("このファイルを使用: ");
-                output.push_str(&self.dependencies.imported_by.join(", "));
-                output.push('\n');
-            }
-            output.push('\n');
-        }
-
-        // Sibling files
-        if !self.sibling_files.is_empty() {
-            output.push_str("## 同じディレクトリのファイル\n");
-            output.push_str(&self.sibling_files.join(", "));
-            output.push_str("\n\n");
-        }
-
-        output
+        crate::prompt::format_project_context(self)
     }
 
     /// Check if the context has any useful information
@@ -318,51 +258,11 @@ impl RawContext {
     }
 
     /// Convert to prompt string - just concatenate, let AI parse
+    ///
+    /// Delegates to [`crate::prompt::format_raw_context`] where
+    /// the presentation logic lives.
     pub fn to_prompt_string(&self) -> String {
-        let mut result = String::new();
-
-        // Structure
-        if !self.structure.is_empty() {
-            result.push_str("## プロジェクト構造\n```\n");
-            result.push_str(&self.structure);
-            result.push_str("```\n\n");
-        }
-
-        // Co-changed files
-        if !self.cochanged.is_empty() {
-            result.push_str("## 一緒に変更されるファイル\n");
-            for (file, count) in &self.cochanged {
-                result.push_str(&format!("- {} ({}回)\n", file, count));
-            }
-            result.push('\n');
-        }
-
-        // Related file contents
-        if !self.related_files.is_empty() {
-            result.push_str("## 関連ファイルの内容\n");
-            for (name, content) in &self.related_files {
-                result.push_str(&format!("### {}\n```\n", name));
-                // Truncate if too long
-                if content.len() > 2000 {
-                    // Find safe UTF-8 boundary
-                    let truncate_at = content.floor_char_boundary(2000);
-                    result.push_str(&content[..truncate_at]);
-                    result.push_str("\n... (truncated)");
-                } else {
-                    result.push_str(content);
-                }
-                result.push_str("\n```\n\n");
-            }
-        }
-
-        // Docs
-        if let Some(docs) = &self.docs {
-            result.push_str("## プロジェクト要件/ドキュメント\n");
-            result.push_str(docs);
-            result.push('\n');
-        }
-
-        result
+        crate::prompt::format_raw_context(self)
     }
 }
 

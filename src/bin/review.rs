@@ -4,6 +4,8 @@
 //!   review <file>           - Review a single file
 //!   review --dir <dir>      - Review all modified files in directory
 //!   review --diff           - Review git diff (staged or unstaged)
+//!   review --hook           - Pre-commit hook mode (review staged diff)
+//!   review --hook-install   - Install git pre-commit hook
 
 use ai_code_review::{
     build_analyze_prompt, build_discovery_prompt, gather_raw_context, generate_module_tree,
@@ -17,12 +19,14 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: review <file|--dir <dir>|--diff|--discover|--analyze>");
+        eprintln!("Usage: review <file|--dir <dir>|--diff|--discover|--analyze|--hook>");
         eprintln!("  <file>         Review a single file");
         eprintln!("  --dir <dir>    Review all source files in directory");
         eprintln!("  --diff         Review git diff (changed files)");
         eprintln!("  --discover     Discovery mode (requires --goal)");
         eprintln!("  --analyze <f>  Analyze file with AI (no AST parsing, AI does the work)");
+        eprintln!("  --hook         Pre-commit hook mode (review staged diff)");
+        eprintln!("  --hook-install Install git pre-commit hook");
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --backend <gemini|claude>  AI backend (default: gemini)");
@@ -77,6 +81,12 @@ fn main() {
             }
             "--diff" => {
                 mode = Mode::Diff;
+            }
+            "--hook" => {
+                mode = Mode::Hook;
+            }
+            "--hook-install" => {
+                mode = Mode::HookInstall;
             }
             "--discover" => {
                 mode = Mode::Discover(String::new()); // placeholder, goal filled later
@@ -139,6 +149,12 @@ fn main() {
         Mode::Analyze(path) => {
             analyze_with_ai(&path, backend);
         }
+        Mode::Hook => {
+            run_hook(backend);
+        }
+        Mode::HookInstall => {
+            install_hook();
+        }
     }
 }
 
@@ -148,6 +164,8 @@ enum Mode {
     Diff,
     Discover(String), // goal
     Analyze(PathBuf), // file to analyze with AI
+    Hook,             // Pre-commit hook mode
+    HookInstall,      // Install git pre-commit hook
 }
 
 fn review_file(path: &Path, backend: Backend, prompt_type: PromptType, context_enabled: bool) {
@@ -440,4 +458,88 @@ fn discover_architecture(goal: &str, backend: Backend) {
             std::process::exit(1);
         }
     }
+}
+
+
+fn run_hook(backend: Backend) {
+    let _cwd = std::env::current_dir().unwrap_or_default();
+
+    // Get staged diff
+    let diff = {
+        let mut cmd = Command::new("git");
+        cmd.args(["diff", "--cached"]);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        match cmd.output() {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            _ => {
+                return;
+            }
+        }
+    };
+
+    if diff.trim().is_empty() {
+        return;
+    }
+
+    let diff_lines: Vec<&str> = diff.lines().collect();
+    if diff_lines.len() > 500 {
+        eprintln!(
+            "⚠ Diff too large ({} lines), skipping review",
+            diff_lines.len()
+        );
+        return;
+    }
+
+    eprintln!("=== AI Code Review (Hook) ===");
+    eprintln!("Reviewing {} lines...\n", diff_lines.len());
+
+    // Use concise review prompt for hook mode
+    let prompt = format!(
+        "Code review of staged changes. If critical issues found, start line with ⚠. If OK, respond ✓ LGTM. Be concise.\n\nFocus: design flaws, bugs, security issues.\n\n```diff\n{}\n```",
+        diff
+    );
+
+    let options = AnalyzeOptions::default().with_backend(backend);
+    match ai_prompt(&prompt, options) {
+        Ok(review) => {
+            eprintln!("{}\n", review);
+            eprintln!("=== Review Complete ===\n");
+            if review.contains("⚠") {
+                eprintln!("[BLOCKED] Fix issues above before committing.");
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("Review error: {}", e);
+            // Don't block on errors
+        }
+    }
+}
+
+fn install_hook() {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let hook_dir = cwd.join(".git").join("hooks");
+    if !hook_dir.exists() {
+        eprintln!("Error: Not a git repository (no .git/hooks)");
+        std::process::exit(1);
+    }
+    let hook_path = hook_dir.join("pre-commit");
+    let review_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("review"));
+    let script = if cfg!(target_os = "windows") {
+        format!("#!/bin/sh\n\"{}\" --hook\n", review_path.display())
+    } else {
+        format!("#!/bin/sh\n\"{}\" --hook\n", review_path.display())
+    };
+    std::fs::write(&hook_path, &script).expect("Failed to write hook");
+    // Make executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755)).ok();
+    }
+    println!("✓ Pre-commit hook installed at {}", hook_path.display());
 }

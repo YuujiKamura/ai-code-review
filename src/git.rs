@@ -1,13 +1,20 @@
 //! Git integration for getting diffs
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
-
-#[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
+/// Create a `Command` for git with the given arguments.
+/// On Windows, sets `CREATE_NO_WINDOW` to suppress console popups.
+fn new_git_command(args: &[&str]) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.args(args);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    cmd
+}
 
 /// Get git diff for a file (unstaged changes first, then staged)
 pub fn get_git_diff(file_path: &Path) -> Option<String> {
@@ -15,11 +22,8 @@ pub fn get_git_diff(file_path: &Path) -> Option<String> {
     let parent = file_path.parent()?;
 
     // Try unstaged changes first
-    let mut cmd = Command::new("git");
-    cmd.args(["diff", "--", &file_str]).current_dir(parent);
-
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut cmd = new_git_command(&["diff", "--", &file_str]);
+    cmd.current_dir(parent);
 
     let output = cmd.output().ok()?;
     if output.status.success() {
@@ -29,12 +33,8 @@ pub fn get_git_diff(file_path: &Path) -> Option<String> {
         }
 
         // Try staged changes
-        let mut cmd2 = Command::new("git");
-        cmd2.args(["diff", "--cached", "--", &file_str])
-            .current_dir(parent);
-
-        #[cfg(target_os = "windows")]
-        cmd2.creation_flags(CREATE_NO_WINDOW);
+        let mut cmd2 = new_git_command(&["diff", "--cached", "--", &file_str]);
+        cmd2.current_dir(parent);
 
         let output2 = cmd2.output().ok()?;
         if output2.status.success() {
@@ -51,12 +51,8 @@ pub fn get_git_diff(file_path: &Path) -> Option<String> {
 /// Check if a path is inside a git repository
 #[allow(dead_code)]
 pub fn is_git_repo(path: &Path) -> bool {
-    let mut cmd = Command::new("git");
-    cmd.args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(path);
-
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut cmd = new_git_command(&["rev-parse", "--is-inside-work-tree"]);
+    cmd.current_dir(path);
 
     cmd.output()
         .map(|o| o.status.success())
@@ -66,17 +62,43 @@ pub fn is_git_repo(path: &Path) -> bool {
 /// Get the git root directory for a path
 #[allow(dead_code)]
 pub fn get_git_root(path: &Path) -> Option<String> {
-    let mut cmd = Command::new("git");
-    cmd.args(["rev-parse", "--show-toplevel"]).current_dir(path);
-
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut cmd = new_git_command(&["rev-parse", "--show-toplevel"]);
+    cmd.current_dir(path);
 
     let output = cmd.output().ok()?;
     if output.status.success() {
         Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
         None
+    }
+}
+
+/// Get the staged diff (all files) for pre-commit hook support
+pub fn get_staged_diff(repo_dir: &Path) -> Option<String> {
+    let mut cmd = new_git_command(&["diff", "--cached"]);
+    cmd.current_dir(repo_dir);
+    let output = cmd.output().ok()?;
+    if output.status.success() {
+        let s = String::from_utf8_lossy(&output.stdout).to_string();
+        if s.trim().is_empty() { None } else { Some(s) }
+    } else {
+        None
+    }
+}
+
+/// Get the list of staged files as absolute paths
+pub fn get_staged_files(repo_dir: &Path) -> Vec<PathBuf> {
+    let mut cmd = new_git_command(&["diff", "--cached", "--name-only"]);
+    cmd.current_dir(repo_dir);
+    match cmd.output() {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|l| repo_dir.join(l))
+                .collect()
+        }
+        _ => vec![],
     }
 }
 
@@ -111,8 +133,7 @@ pub fn get_cochanged_files(file_path: &Path, lookback: usize) -> Vec<(String, us
 
     // Single git command: get commits with their changed files
     // --full-diff ensures all files in each commit are listed, not just the pathspec match
-    let mut cmd = Command::new("git");
-    cmd.args([
+    let mut cmd = new_git_command(&[
         "log",
         "--format=",   // suppress commit info, output only file names
         "--name-only",
@@ -121,11 +142,8 @@ pub fn get_cochanged_files(file_path: &Path, lookback: usize) -> Vec<(String, us
         &lookback.to_string(),
         "--",
         &file_str,
-    ])
-    .current_dir(parent);
-
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    ]);
+    cmd.current_dir(parent);
 
     let output = match cmd.output() {
         Ok(o) if o.status.success() => o,

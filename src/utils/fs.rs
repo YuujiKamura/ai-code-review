@@ -89,23 +89,25 @@ fn find_source_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-/// Walk a directory tree and apply a function to each source file
+/// Recursively find all source files matching the given extensions.
+///
+/// Walks the directory tree starting from `dir`, skipping hidden directories,
+/// `target/`, `node_modules/`, and `__pycache__/`.
 ///
 /// # Arguments
-/// * `base_path` - The root directory to start from
-/// * `callback` - Function to call for each source file found
-#[allow(dead_code)]
-pub fn walk_source_files<F>(base_path: &Path, mut callback: F)
-where
-    F: FnMut(&Path),
-{
-    walk_source_files_recursive(base_path, &mut callback);
+/// * `dir` - The root directory to start searching from
+/// * `extensions` - A slice of file extensions to match (e.g. `&["rs", "py", "ts"]`).
+///   Each extension should be without a leading dot.
+///
+/// # Returns
+/// A vector of paths to matching source files
+pub fn walk_source_files(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    walk_source_files_recursive(dir, extensions, &mut files);
+    files
 }
 
-fn walk_source_files_recursive<F>(dir: &Path, callback: &mut F)
-where
-    F: FnMut(&Path),
-{
+fn walk_source_files_recursive(dir: &Path, extensions: &[&str], files: &mut Vec<PathBuf>) {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(_) => return,
@@ -118,10 +120,17 @@ where
 
         if path.is_dir() {
             if !should_skip_dir(&name_str) {
-                walk_source_files_recursive(&path, callback);
+                walk_source_files_recursive(&path, extensions, files);
             }
-        } else if path.is_file() && is_source_file(&path) {
-            callback(&path);
+        } else if path.is_file() {
+            let matches = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|ext| extensions.iter().any(|&e| e == ext))
+                .unwrap_or(false);
+            if matches {
+                files.push(path);
+            }
         }
     }
 }
@@ -186,10 +195,40 @@ mod tests {
     fn test_walk_source_files() {
         let dir = tempdir().unwrap();
         File::create(dir.path().join("test.rs")).unwrap();
+        File::create(dir.path().join("app.py")).unwrap();
         File::create(dir.path().join("config.toml")).unwrap();
 
-        let mut count = 0;
-        walk_source_files(dir.path(), |_| count += 1);
-        assert_eq!(count, 1);
+        // Only .rs files
+        let rs_files = walk_source_files(dir.path(), &["rs"]);
+        assert_eq!(rs_files.len(), 1);
+        assert!(rs_files[0].ends_with("test.rs"));
+
+        // .rs and .py files
+        let multi_files = walk_source_files(dir.path(), &["rs", "py"]);
+        assert_eq!(multi_files.len(), 2);
+
+        // No matching extension
+        let no_files = walk_source_files(dir.path(), &["go"]);
+        assert!(no_files.is_empty());
+    }
+
+    #[test]
+    fn test_walk_source_files_skips_dirs() {
+        let dir = tempdir().unwrap();
+        let target_dir = dir.path().join("target");
+        std::fs::create_dir(&target_dir).unwrap();
+        File::create(target_dir.join("ignored.rs")).unwrap();
+
+        let hidden_dir = dir.path().join(".hidden");
+        std::fs::create_dir(&hidden_dir).unwrap();
+        File::create(hidden_dir.join("secret.rs")).unwrap();
+
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir(&src_dir).unwrap();
+        File::create(src_dir.join("main.rs")).unwrap();
+
+        let files = walk_source_files(dir.path(), &["rs"]);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("main.rs"));
     }
 }

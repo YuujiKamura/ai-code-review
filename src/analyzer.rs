@@ -4,18 +4,40 @@
 //! files that import a given file.
 
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::parser::{analyze_file, FileAnalysis};
-use crate::utils::fs::{is_source_file, should_skip_dir};
+use crate::utils::fs::walk_source_files;
+
+/// Check if an import path matches the target module name,
+/// using the appropriate separator for each language.
+///
+/// - Rust (`.rs`): `::` separator
+/// - Python (`.py`): `.` separator
+/// - JS/TS and others: `/` separator
+///
+/// # Arguments
+/// * `import_path` - The import path string (e.g. `crate::target` or `os.path`)
+/// * `target_module` - The module name to search for
+/// * `file_ext` - The file extension without a leading dot (e.g. `"rs"`, `"py"`)
+///
+/// # Returns
+/// `true` if any segment of the import path equals `target_module`
+fn path_matches_import(import_path: &str, target_module: &str, file_ext: &str) -> bool {
+    let separator = match file_ext {
+        "rs" => "::",
+        "py" => ".",
+        _ => "/", // JS/TS and others
+    };
+    let parts: Vec<&str> = import_path.split(separator).collect();
+    parts.iter().any(|&p| p == target_module)
+}
 
 /// Find files that import the given file
 ///
 /// Walks the directory tree starting from `base_path` and finds
 /// all files that contain imports matching the target file name.
-/// Uses an internal cache to avoid re-parsing files during the
-/// recursive directory walk.
+/// Uses an internal cache to avoid re-parsing files.
 ///
 /// # Arguments
 /// * `file_path` - The file to search for importers of
@@ -66,6 +88,12 @@ pub fn find_importers_cached(
     find_importers_inner(file_path, base_path, target_name, cache)
 }
 
+/// All source file extensions we want to scan for imports
+const IMPORT_SCAN_EXTENSIONS: &[&str] = &[
+    "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cpp", "c", "h", "hpp", "cs", "rb",
+    "swift", "kt",
+];
+
 fn find_importers_inner(
     file_path: &Path,
     base_path: &Path,
@@ -74,39 +102,40 @@ fn find_importers_inner(
 ) -> Vec<String> {
     let mut importers = Vec::new();
 
-    // Walk the base_path and find files that might import our target
-    if let Ok(entries) = fs::read_dir(base_path) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
+    let source_files = walk_source_files(base_path, IMPORT_SCAN_EXTENSIONS);
 
-            if path.is_file() && path != file_path && is_source_file(&path) {
-                // Use cached analysis if available, otherwise parse and cache
-                let analysis = if let Some(cached) = cache.get(&path) {
-                    Some(cached)
-                } else if let Ok(parsed) = analyze_file(&path) {
-                    cache.insert(path.clone(), parsed);
-                    cache.get(&path)
-                } else {
-                    None
-                };
+    for path in source_files {
+        // Skip the target file itself
+        if path == file_path {
+            continue;
+        }
 
-                if let Some(analysis) = analysis {
-                    for import in &analysis.imports {
-                        if import.module_path.split("::").any(|seg| seg == target_name)
-                            || import.items.iter().any(|i| i == target_name)
-                        {
-                            if let Some(p) = path.to_str() {
-                                importers.push(p.to_string());
-                            }
-                            break;
-                        }
+        // Determine file extension for separator selection
+        let file_ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+
+        // Use cached analysis if available, otherwise parse and cache
+        let analysis = if let Some(cached) = cache.get(&path) {
+            Some(cached)
+        } else if let Ok(parsed) = analyze_file(&path) {
+            cache.insert(path.clone(), parsed);
+            cache.get(&path)
+        } else {
+            None
+        };
+
+        if let Some(analysis) = analysis {
+            for import in &analysis.imports {
+                if path_matches_import(&import.module_path, target_name, file_ext)
+                    || import.items.iter().any(|i| i == target_name)
+                {
+                    if let Some(p) = path.to_str() {
+                        importers.push(p.to_string());
                     }
+                    break;
                 }
-            } else if path.is_dir() && !should_skip_dir(&name_str) {
-                // Recurse into subdirectories, passing the cache and target_name through
-                importers.extend(find_importers_inner(file_path, &path, target_name, cache));
             }
         }
     }
@@ -175,5 +204,32 @@ mod tests {
         // The cached analysis contains an import of "target", so it should match
         assert_eq!(result.len(), 1);
         assert!(result[0].contains("other.rs"));
+    }
+
+    #[test]
+    fn test_path_matches_import_rust() {
+        assert!(path_matches_import("crate::target", "target", "rs"));
+        assert!(path_matches_import("crate::foo::bar", "foo", "rs"));
+        assert!(!path_matches_import("crate::foo::bar", "baz", "rs"));
+    }
+
+    #[test]
+    fn test_path_matches_import_python() {
+        assert!(path_matches_import("os.path", "os", "py"));
+        assert!(path_matches_import("os.path", "path", "py"));
+        assert!(!path_matches_import("os.path", "sys", "py"));
+    }
+
+    #[test]
+    fn test_path_matches_import_typescript() {
+        assert!(path_matches_import("./utils/helper", "helper", "ts"));
+        assert!(path_matches_import("../components/Button", "Button", "tsx"));
+        assert!(!path_matches_import("./utils/helper", "other", "ts"));
+    }
+
+    #[test]
+    fn test_path_matches_import_js() {
+        assert!(path_matches_import("./lib/config", "config", "js"));
+        assert!(path_matches_import("./lib/config", "config", "jsx"));
     }
 }
