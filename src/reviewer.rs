@@ -80,15 +80,14 @@ pub(crate) fn perform_review(
     config: &ReviewConfig,
     base_path: Option<&Path>,
 ) -> Result<ReviewResult> {
-    // Get content (git diff or file content)
-    let content = get_git_diff(path)
-        .or_else(|| fs::read_to_string(path).ok())
-        .ok_or_else(|| {
-            CodeReviewError::IoError(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Cannot read file",
-            ))
-        })?;
+    // Get content (git diff or file content), tracking which source it came from
+    let (content, is_diff) = match get_git_diff(path) {
+        Some(diff) => (diff, true),
+        None => {
+            let full = fs::read_to_string(path).map_err(CodeReviewError::IoError)?;
+            (full, false)
+        }
+    };
 
     if content.trim().is_empty() {
         return Err(CodeReviewError::IoError(std::io::Error::new(
@@ -97,8 +96,18 @@ pub(crate) fn perform_review(
         )));
     }
 
+    // When content is the full file (not a diff), prepend a note so the AI
+    // knows it is reviewing the entire file rather than a set of changes.
+    let labeled_content;
+    let prompt_content: &str = if is_diff {
+        &content
+    } else {
+        labeled_content = format!("（注: git diffが取得できないため、ファイル全体を表示しています。変更点ではなくファイル全体をレビューしてください）\n\n{}", content);
+        &labeled_content
+    };
+
     // Build the prompt using the helper function
-    let prompt = build_review_prompt(path, &content, config, base_path);
+    let prompt = build_review_prompt(path, prompt_content, config, base_path);
 
     // Run the review
     let options = if let Some(ref m) = config.model {
@@ -118,7 +127,7 @@ const DEFAULT_DEBOUNCE_MS: u64 = 500;
 const DEFAULT_EXTENSIONS: &[&str] = &["rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cpp", "c", "h"];
 
 /// Type alias for review callback
-type ReviewCallback = Box<dyn Fn(ReviewResult) + Send + Sync + 'static>;
+type ReviewCallback = dyn Fn(ReviewResult) + Send + Sync + 'static;
 
 /// Consolidated shared state for debouncing and logging
 struct SharedState {
@@ -134,8 +143,6 @@ pub struct CodeReviewer {
     config: Arc<ReviewConfig>,
     /// File extensions to watch
     extensions: Vec<String>,
-    /// Prompt type (used for builder logic)
-    prompt_type: PromptType,
     /// Debounce duration in milliseconds
     debounce_ms: u64,
     /// Callback for review results
@@ -168,7 +175,6 @@ impl CodeReviewer {
                 context_depth: 50,
             }),
             extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
-            prompt_type: PromptType::Default,
             debounce_ms: DEFAULT_DEBOUNCE_MS,
             on_review: None,
             watcher: None,
@@ -201,13 +207,11 @@ impl CodeReviewer {
     /// Set a custom prompt template
     pub fn with_prompt(mut self, template: impl Into<String>) -> Self {
         Arc::make_mut(&mut self.config).prompt_template = template.into();
-        self.prompt_type = PromptType::Custom;
         self
     }
 
     /// Set the prompt type
     pub fn with_prompt_type(mut self, prompt_type: PromptType) -> Self {
-        self.prompt_type = prompt_type;
         if prompt_type != PromptType::Custom {
             Arc::make_mut(&mut self.config).prompt_template = prompt_type.template().to_string();
         }
@@ -233,20 +237,13 @@ impl CodeReviewer {
     }
 
     /// Set a log file path for review results
-    ///
-    /// Returns an error if the shared state lock is poisoned.
-    pub fn with_log_file(self, path: impl Into<PathBuf>) -> Result<Self> {
+    pub fn with_log_file(self, path: impl Into<PathBuf>) -> Self {
         let log_path = path.into();
         self.shared_state
             .lock()
-            .map_err(|_| {
-                CodeReviewError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Failed to acquire shared state lock",
-                ))
-            })?
+            .expect("shared state lock poisoned during construction")
             .log_path = Some(log_path);
-        Ok(self)
+        self
     }
 
     /// Set callback for when a review completes
@@ -254,7 +251,7 @@ impl CodeReviewer {
     where
         F: Fn(ReviewResult) + Send + Sync + 'static,
     {
-        self.on_review = Some(Arc::new(Box::new(callback)));
+        self.on_review = Some(Arc::new(callback));
         self
     }
 

@@ -80,17 +80,9 @@ pub const ARCHITECTURE_REVIEW_PROMPT: &str = r#"以下のコードをアーキ�
 ## チェック項目
 
 1. 単一責任の原則（SRP）に違反していないか
-2. 依存関係は適切か
+2. 依存関係は適切か（循環依存がないか）
 3. モジュール間の結合度は低く保たれているか
-4. このファイル/モジュールに置くべきコードか
-5. より適切な配置場所はないか
-
-## チェック項目（コンテキスト情報がある場合）
-
-1. このファイルの責務は、同じディレクトリの他ファイルと重複していないか
-2. 関連ファイルとの整合性は取れているか
-3. 依存方向は適切か（循環依存がないか）
-4. このファイルにあるべきコードか、別の場所が適切か
+4. このファイル/モジュールに置くべきコードか、より適切な配置場所はないか
 5. public APIは最小限か
 
 ## 出力形式
@@ -228,7 +220,7 @@ pub fn build_prompt_with_context(
     template
         .replace("{file_name}", file_name)
         .replace("{code}", code)
-        .replace("{content}", &format!("{}\n\nファイル: {}\n\n```\n{}\n```", context, file_name, code))
+        .replace("{content}", &format!("{}\n\n{}", context, code))
         .replace("{context}", context)
 }
 

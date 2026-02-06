@@ -27,8 +27,12 @@ pub struct FileAnalysis {
     /// Import statements found
     pub imports: Vec<ImportInfo>,
     /// Public exports (pub fn/struct/enum)
+    /// Currently populated by parsers and used in tests; read access planned for future features.
+    #[allow(dead_code)]
     pub exports: Vec<String>,
     /// Detected language
+    /// Currently populated by parsers and used in tests; read access planned for future features.
+    #[allow(dead_code)]
     pub language: String,
 }
 

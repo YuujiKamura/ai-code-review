@@ -79,7 +79,7 @@ fn main() {
                 mode = Mode::Diff;
             }
             "--discover" => {
-                // Will be set after parsing --goal
+                mode = Mode::Discover(String::new()); // placeholder, goal filled later
             }
             "--analyze" => {
                 i += 1;
@@ -106,7 +106,7 @@ fn main() {
     }
 
     // Handle --discover mode
-    if args.iter().any(|a| a == "--discover") {
+    if let Mode::Discover(_) = &mode {
         match goal {
             Some(g) => {
                 mode = Mode::Discover(g);
@@ -150,7 +150,7 @@ enum Mode {
     Analyze(PathBuf), // file to analyze with AI
 }
 
-fn review_file(path: &PathBuf, backend: Backend, prompt_type: PromptType, context_enabled: bool) {
+fn review_file(path: &Path, backend: Backend, prompt_type: PromptType, context_enabled: bool) {
     let parent = path.parent().unwrap_or(std::path::Path::new("."));
     let reviewer = match CodeReviewer::new(parent) {
         Ok(r) => r.with_backend(backend).with_prompt_type(prompt_type).with_context(context_enabled),
@@ -173,7 +173,7 @@ fn review_file(path: &PathBuf, backend: Backend, prompt_type: PromptType, contex
     }
 }
 
-fn review_directory(dir: &PathBuf, backend: Backend, prompt_type: PromptType, context_enabled: bool) {
+fn review_directory(dir: &Path, backend: Backend, prompt_type: PromptType, context_enabled: bool) {
     let reviewer = match CodeReviewer::new(dir) {
         Ok(r) => r.with_backend(backend).with_prompt_type(prompt_type).with_context(context_enabled),
         Err(e) => {
@@ -184,10 +184,10 @@ fn review_directory(dir: &PathBuf, backend: Backend, prompt_type: PromptType, co
 
     // Find source files
     let extensions = ["rs", "ts", "tsx", "js", "jsx", "py"];
-    let files = find_files(dir, &extensions);
+    let files = find_modified_files(dir, &extensions);
 
     if files.is_empty() {
-        println!("No source files found in {:?}", dir);
+        println!("No modified source files found in {:?}", dir);
         return;
     }
 
@@ -208,9 +208,16 @@ fn review_directory(dir: &PathBuf, backend: Backend, prompt_type: PromptType, co
 
 fn review_diff(backend: Backend, prompt_type: PromptType, context_enabled: bool) {
     // Get changed files from git
-    let output = Command::new("git")
-        .args(["diff", "--name-only", "HEAD"])
-        .output();
+    let output = {
+        let mut cmd = Command::new("git");
+        cmd.args(["diff", "--name-only", "HEAD"]);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        cmd.output()
+    };
 
     let changed_files: Vec<PathBuf> = match output {
         Ok(o) => String::from_utf8_lossy(&o.stdout)
@@ -264,7 +271,56 @@ fn print_default_next_steps() {
     println!("- 変更後に再レビュー");
 }
 
-fn find_files(dir: &PathBuf, extensions: &[&str]) -> Vec<PathBuf> {
+fn find_modified_files(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
+    // Try git status first
+    let mut cmd = Command::new("git");
+    cmd.args(["status", "--porcelain", "--untracked-files=no"]);
+    cmd.current_dir(dir);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+
+    if let Ok(output) = cmd.output() {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let files: Vec<PathBuf> = stdout
+                .lines()
+                .filter_map(|line| {
+                    let line = line.trim();
+                    if line.len() > 3 {
+                        let raw_path = line[3..].trim();
+                        // Handle renames: "R  old -> new" -> use "new"
+                        let file = if raw_path.contains(" -> ") {
+                            raw_path.rsplit(" -> ").next().unwrap_or(raw_path)
+                        } else {
+                            raw_path
+                        };
+                        let path = dir.join(file);
+                        if path.exists() {
+                            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                                if extensions.contains(&ext) {
+                                    return Some(path);
+                                }
+                            }
+                        }
+                    }
+                    None
+                })
+                .collect();
+
+            if !files.is_empty() {
+                return files;
+            }
+        }
+    }
+
+    // Fallback to all files if not in git repo
+    find_files(dir, extensions)
+}
+
+fn find_files(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     let mut result = Vec::new();
 
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -287,7 +343,7 @@ fn find_files(dir: &PathBuf, extensions: &[&str]) -> Vec<PathBuf> {
     result
 }
 
-fn analyze_with_ai(file_path: &PathBuf, backend: Backend) {
+fn analyze_with_ai(file_path: &Path, backend: Backend) {
     if !file_path.exists() {
         eprintln!("Error: File not found: {:?}", file_path);
         std::process::exit(1);
@@ -296,7 +352,7 @@ fn analyze_with_ai(file_path: &PathBuf, backend: Backend) {
     let base_path = file_path.parent().unwrap_or(Path::new("."));
 
     // Gather raw context (no AST parsing, just file contents)
-    let raw_ctx = gather_raw_context(file_path, base_path, 3);
+    let raw_ctx = gather_raw_context(file_path, base_path, 3, 50);
 
     // Read the target file
     let file_content = match std::fs::read_to_string(file_path) {

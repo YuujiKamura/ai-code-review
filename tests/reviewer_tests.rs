@@ -95,8 +95,7 @@ fn test_reviewer_builder_log_file() {
 
     let _reviewer = CodeReviewer::new(dir.path())
         .unwrap()
-        .with_log_file(&log_path)
-        .unwrap();
+        .with_log_file(&log_path);
 }
 
 #[test]

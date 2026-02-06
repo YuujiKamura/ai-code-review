@@ -32,30 +32,10 @@ pub fn generate_module_tree(base_path: &Path, target_file: &Path) -> String {
     result.push_str(dir_name);
     result.push_str("/\n");
 
-    // Collect and sort entries
-    let mut entries: Vec<_> = match fs::read_dir(base_path) {
-        Ok(entries) => entries
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                let name = e.file_name();
-                let name_str = name.to_string_lossy();
-                // Skip hidden files and common build directories
-                !should_skip_dir(&name_str)
-            })
-            .collect(),
-        Err(_) => return result,
-    };
-
-    // Sort: directories first, then files, alphabetically
-    entries.sort_by(|a, b| {
-        let a_is_dir = a.path().is_dir();
-        let b_is_dir = b.path().is_dir();
-        match (a_is_dir, b_is_dir) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.file_name().cmp(&b.file_name()),
-        }
-    });
+    let entries = sorted_entries(base_path);
+    if entries.is_empty() {
+        return result;
+    }
 
     let total = entries.len();
     for (idx, entry) in entries.iter().enumerate() {
@@ -92,15 +72,9 @@ pub fn generate_module_tree(base_path: &Path, target_file: &Path) -> String {
     result
 }
 
-/// Generate subtree with proper indentation (limited to 2 levels deep)
-fn generate_subtree(dir: &Path, target_file: &Path, prefix: &str, depth: usize) -> String {
-    if depth > 2 {
-        return String::new();
-    }
-
-    let mut result = String::new();
-
-    let mut entries: Vec<_> = match fs::read_dir(dir) {
+/// Collect, filter, and sort directory entries (directories first, then alphabetical)
+fn sorted_entries(dir: &Path) -> Vec<std::fs::DirEntry> {
+    let mut entries: Vec<_> = match std::fs::read_dir(dir) {
         Ok(entries) => entries
             .filter_map(|e| e.ok())
             .filter(|e| {
@@ -109,10 +83,9 @@ fn generate_subtree(dir: &Path, target_file: &Path, prefix: &str, depth: usize) 
                 !should_skip_dir(&name_str)
             })
             .collect(),
-        Err(_) => return result,
+        Err(_) => return Vec::new(),
     };
 
-    // Sort entries
     entries.sort_by(|a, b| {
         let a_is_dir = a.path().is_dir();
         let b_is_dir = b.path().is_dir();
@@ -122,6 +95,19 @@ fn generate_subtree(dir: &Path, target_file: &Path, prefix: &str, depth: usize) 
             _ => a.file_name().cmp(&b.file_name()),
         }
     });
+
+    entries
+}
+
+/// Generate subtree with proper indentation (limited to 2 levels deep)
+fn generate_subtree(dir: &Path, target_file: &Path, prefix: &str, depth: usize) -> String {
+    if depth > 2 {
+        return String::new();
+    }
+
+    let mut result = String::new();
+
+    let entries = sorted_entries(dir);
 
     let total = entries.len();
     for (idx, entry) in entries.iter().enumerate() {

@@ -60,7 +60,6 @@
 
 mod analyzer;
 mod context;
-mod context_simple;
 mod error;
 mod git;
 mod modules;
@@ -84,25 +83,19 @@ mod utils;
 /// ```
 pub use cli_ai_analyzer::Backend;
 pub use context::{
-    gather_context, gather_context_default, gather_requirements, DependencyInfo, ProjectContext,
-    RelatedFile, RequirementsContext,
+    gather_context, gather_context_default, gather_raw_context, gather_requirements,
+    DependencyInfo, ProjectContext, RawContext, RelatedFile, RequirementsContext,
 };
-pub use context_simple::{gather_raw_context, RawContext};
 pub use error::{CodeReviewError, Result};
-pub use analyzer::find_importers;
-pub use modules::{generate_module_tree, get_sibling_files};
-pub use parser::{analyze_file, FileAnalysis, ImportInfo};
+pub use modules::generate_module_tree;
 pub use prompt::{
     build_analyze_prompt, build_discovery_prompt, build_prompt, build_prompt_with_context,
-    PromptType, ANALYZE_PROMPT, ARCHITECTURE_REVIEW_PROMPT, ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT,
-    DEFAULT_REVIEW_PROMPT, DISCOVERY_PROMPT, HOLISTIC_REVIEW_PROMPT, QUICK_REVIEW_PROMPT,
-    SECURITY_REVIEW_PROMPT,
+    PromptType, ANALYZE_PROMPT, ARCHITECTURE_REVIEW_PROMPT,
+    ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT, DEFAULT_REVIEW_PROMPT, DISCOVERY_PROMPT,
+    HOLISTIC_REVIEW_PROMPT, QUICK_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT,
 };
 pub use result::{ReviewResult, ReviewSeverity, ReviewSummary};
 pub use reviewer::CodeReviewer;
-
-/// Re-export folder-watcher types that might be useful
-pub use folder_watcher::{FolderWatcher, WatcherBuilder};
 
 #[cfg(test)]
 mod tests {
@@ -172,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_prompt_building() {
-        let prompt = build_prompt(QUICK_REVIEW_PROMPT, "main.rs", "fn main() {}");
+        let prompt = crate::prompt::build_prompt(crate::prompt::QUICK_REVIEW_PROMPT, "main.rs", "fn main() {}");
         assert!(prompt.contains("main.rs"));
         assert!(prompt.contains("fn main() {}"));
     }

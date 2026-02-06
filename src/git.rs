@@ -100,10 +100,29 @@ pub fn get_cochanged_files(file_path: &Path, lookback: usize) -> Vec<(String, us
         None => return Vec::new(),
     };
 
-    // Get commits that touched this file
+    let target_name = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+
+    if target_name.is_empty() {
+        return Vec::new();
+    }
+
+    // Single git command: get commits with their changed files
+    // --full-diff ensures all files in each commit are listed, not just the pathspec match
     let mut cmd = Command::new("git");
-    cmd.args(["log", "--format=%H", "-n", &lookback.to_string(), "--", &file_str])
-        .current_dir(parent);
+    cmd.args([
+        "log",
+        "--format=",   // suppress commit info, output only file names
+        "--name-only",
+        "--full-diff",
+        "-n",
+        &lookback.to_string(),
+        "--",
+        &file_str,
+    ])
+    .current_dir(parent);
 
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -114,41 +133,21 @@ pub fn get_cochanged_files(file_path: &Path, lookback: usize) -> Vec<(String, us
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let commits: Vec<&str> = stdout
-        .lines()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .take(lookback)
-        .collect();
 
-    if commits.is_empty() {
-        return Vec::new();
-    }
-
-    // Count co-changed files across all commits
+    // Parse output: "file1\nfile2\n\nfile3\n..." (blank lines between commits)
     let mut file_counts: HashMap<String, usize> = HashMap::new();
-    let target_name = file_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
 
-    for commit in commits {
-        let mut cmd2 = Command::new("git");
-        cmd2.args(["diff-tree", "--no-commit-id", "--name-only", "-r", commit])
-            .current_dir(parent);
-
-        #[cfg(target_os = "windows")]
-        cmd2.creation_flags(CREATE_NO_WINDOW);
-
-        if let Ok(output2) = cmd2.output() {
-            if output2.status.success() {
-                for line in String::from_utf8_lossy(&output2.stdout).lines() {
-                    let line = line.trim();
-                    if !line.is_empty() && !line.ends_with(target_name) {
-                        *file_counts.entry(line.to_string()).or_insert(0) += 1;
-                    }
-                }
-            }
+    let target_suffix = format!("/{}", target_name);
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Skip the target file itself
+        let is_target = line == target_name
+            || line.ends_with(&target_suffix);
+        if !is_target {
+            *file_counts.entry(line.to_string()).or_insert(0) += 1;
         }
     }
 

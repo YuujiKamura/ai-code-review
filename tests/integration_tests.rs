@@ -438,7 +438,6 @@ fn test_reviewer_full_configuration() {
         .with_context(true)
         .with_context_depth(100)
         .with_log_file(&log_path)
-        .unwrap()
         .on_review(|result| {
             println!("Review completed: {}", result.name);
         });

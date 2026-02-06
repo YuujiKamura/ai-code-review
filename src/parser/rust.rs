@@ -309,9 +309,14 @@ fn extract_alias_from_use_as_clause(node: tree_sitter::Node, source: &str) -> Op
     None
 }
 
-fn is_public(node: tree_sitter::Node, source: &str) -> bool {
-    let text = node.utf8_text(source.as_bytes()).unwrap_or("");
-    text.starts_with("pub ")
+fn is_public(node: tree_sitter::Node, _source: &str) -> bool {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "visibility_modifier" {
+            return true;
+        }
+    }
+    false
 }
 
 fn extract_item_name(node: tree_sitter::Node, source: &str) -> Option<String> {
@@ -406,5 +411,26 @@ fn private() {}
         assert_eq!(result.imports.len(), 1);
         assert_eq!(result.imports[0].module_path, "std::collections");
         assert_eq!(result.imports[0].items, vec!["HashMap", "HashSet"]);
+    }
+
+    #[test]
+    fn test_analyze_rust_attributed_pub_items() {
+        let source = r#"
+#[derive(Debug, Clone)]
+pub struct Attributed;
+
+#[inline]
+pub fn attributed_fn() {}
+
+/// Doc comment
+pub enum DocEnum { A, B }
+
+fn private() {}
+"#;
+        let result = analyze_rust(source).unwrap();
+        assert!(result.exports.contains(&"Attributed".to_string()));
+        assert!(result.exports.contains(&"attributed_fn".to_string()));
+        assert!(result.exports.contains(&"DocEnum".to_string()));
+        assert!(!result.exports.contains(&"private".to_string()));
     }
 }
