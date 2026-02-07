@@ -12,6 +12,7 @@ use ai_code_review::{
     gather_raw_context, generate_module_tree,
     shared_finder::find_shared_candidates,
     Backend, CodeReviewer, PromptType, ANALYZE_PROMPT, DISCOVERY_PROMPT, FIND_SHARED_PROMPT,
+    SOURCE_EXTENSIONS,
 };
 use cli_ai_analyzer::{prompt as ai_prompt, AnalyzeOptions};
 use std::path::{Path, PathBuf};
@@ -218,8 +219,7 @@ fn review_directory(dir: &Path, backend: Backend, prompt_type: PromptType, conte
     };
 
     // Find source files
-    let extensions = ["rs", "ts", "tsx", "js", "jsx", "py"];
-    let files = find_modified_files(dir, &extensions);
+    let files = find_modified_files(dir, SOURCE_EXTENSIONS);
 
     if files.is_empty() {
         println!("No modified source files found in {:?}", dir);
@@ -595,11 +595,7 @@ fn install_hook() {
     }
     let hook_path = hook_dir.join("pre-commit");
     let review_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("review"));
-    let script = if cfg!(target_os = "windows") {
-        format!("#!/bin/sh\n\"{}\" --hook\n", review_path.display())
-    } else {
-        format!("#!/bin/sh\n\"{}\" --hook\n", review_path.display())
-    };
+    let script = format!("#!/bin/sh\n\"{}\" --hook\n", review_path.display());
     std::fs::write(&hook_path, &script).expect("Failed to write hook");
     // Make executable on Unix
     #[cfg(unix)]

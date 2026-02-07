@@ -48,31 +48,6 @@ pub fn get_git_diff(file_path: &Path) -> Option<String> {
     None
 }
 
-/// Check if a path is inside a git repository
-#[allow(dead_code)]
-pub fn is_git_repo(path: &Path) -> bool {
-    let mut cmd = new_git_command(&["rev-parse", "--is-inside-work-tree"]);
-    cmd.current_dir(path);
-
-    cmd.output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-/// Get the git root directory for a path
-#[allow(dead_code)]
-pub fn get_git_root(path: &Path) -> Option<String> {
-    let mut cmd = new_git_command(&["rev-parse", "--show-toplevel"]);
-    cmd.current_dir(path);
-
-    let output = cmd.output().ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    }
-}
-
 /// Get the staged diff (all files) for pre-commit hook support
 pub fn get_staged_diff(repo_dir: &Path) -> Option<String> {
     let mut cmd = new_git_command(&["diff", "--cached"]);
@@ -179,14 +154,6 @@ pub fn get_cochanged_files(file_path: &Path, lookback: usize) -> Vec<(String, us
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    #[test]
-    fn test_is_git_repo() {
-        // Current directory should be a git repo if running tests
-        let current = PathBuf::from(".");
-        // This may or may not be true depending on where tests are run
-        let _ = is_git_repo(&current);
-    }
 
     #[test]
     fn test_get_cochanged_files() {

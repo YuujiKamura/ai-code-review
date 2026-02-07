@@ -5,11 +5,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Source code file extensions supported for analysis
-const SOURCE_EXTENSIONS: &[&str] = &[
-    ".rs", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java", ".cpp", ".c", ".h", ".hpp", ".cs",
-    ".rb", ".swift", ".kt",
+/// Source code extensions (without dot)
+pub const SOURCE_EXTENSIONS: &[&str] = &[
+    "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cpp", "c", "h", "hpp", "cs",
+    "rb", "swift", "kt",
 ];
+
+/// Config file extensions (without dot)
+pub const CONFIG_EXTENSIONS: &[&str] = &["json", "toml", "yaml", "yml"];
 
 /// Directories to skip during traversal
 const SKIP_DIRS: &[&str] = &["target", "node_modules", "__pycache__"];
@@ -35,9 +38,9 @@ pub fn should_skip_dir(name: &str) -> bool {
 /// # Returns
 /// `true` if the file has a recognized source code extension
 pub fn is_source_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .map(|name| SOURCE_EXTENSIONS.iter().any(|ext| name.ends_with(ext)))
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| SOURCE_EXTENSIONS.contains(&ext))
         .unwrap_or(false)
 }
 
@@ -49,44 +52,11 @@ pub fn is_source_file(path: &Path) -> bool {
 /// # Returns
 /// `true` if the filename has a recognized source code extension
 pub fn is_source_filename(name: &str) -> bool {
-    SOURCE_EXTENSIONS.iter().any(|ext| name.ends_with(ext))
-}
-
-/// Recursively find source files in a directory
-///
-/// Skips hidden directories, target, node_modules, __pycache__
-///
-/// # Arguments
-/// * `base_path` - The root directory to start searching from
-///
-/// # Returns
-/// A vector of paths to source files found
-#[allow(dead_code)]
-pub fn find_source_files(base_path: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    find_source_files_recursive(base_path, &mut files);
-    files
-}
-
-fn find_source_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-
-        if path.is_dir() {
-            if !should_skip_dir(&name_str) {
-                find_source_files_recursive(&path, files);
-            }
-        } else if path.is_file() && is_source_file(&path) {
-            files.push(path);
-        }
-    }
+    Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| SOURCE_EXTENSIONS.contains(&ext))
+        .unwrap_or(false)
 }
 
 /// Recursively find all source files matching the given extensions.
@@ -167,28 +137,6 @@ mod tests {
         assert!(is_source_filename("main.rs"));
         assert!(is_source_filename("app.tsx"));
         assert!(!is_source_filename("Cargo.toml"));
-    }
-
-    #[test]
-    fn test_find_source_files() {
-        let dir = tempdir().unwrap();
-        let src_dir = dir.path().join("src");
-        std::fs::create_dir(&src_dir).unwrap();
-
-        // Create some source files
-        File::create(src_dir.join("main.rs")).unwrap();
-        File::create(src_dir.join("lib.rs")).unwrap();
-        File::create(dir.path().join("Cargo.toml")).unwrap();
-
-        // Create a directory that should be skipped
-        let target_dir = dir.path().join("target");
-        std::fs::create_dir(&target_dir).unwrap();
-        File::create(target_dir.join("ignored.rs")).unwrap();
-
-        let files = find_source_files(dir.path());
-        assert_eq!(files.len(), 2);
-        assert!(files.iter().any(|p| p.ends_with("main.rs")));
-        assert!(files.iter().any(|p| p.ends_with("lib.rs")));
     }
 
     #[test]

@@ -73,8 +73,8 @@ pub fn generate_module_tree(base_path: &Path, target_file: &Path) -> String {
 }
 
 /// Collect, filter, and sort directory entries (directories first, then alphabetical)
-fn sorted_entries(dir: &Path) -> Vec<std::fs::DirEntry> {
-    let mut entries: Vec<_> = match std::fs::read_dir(dir) {
+fn sorted_entries(dir: &Path) -> Vec<fs::DirEntry> {
+    let entries: Vec<_> = match fs::read_dir(dir) {
         Ok(entries) => entries
             .filter_map(|e| e.ok())
             .filter(|e| {
@@ -86,9 +86,13 @@ fn sorted_entries(dir: &Path) -> Vec<std::fs::DirEntry> {
         Err(_) => return Vec::new(),
     };
 
-    entries.sort_by(|a, b| {
-        let a_is_dir = a.path().is_dir();
-        let b_is_dir = b.path().is_dir();
+    // Cache is_dir() to avoid repeated filesystem calls during sort
+    let mut with_is_dir: Vec<(bool, fs::DirEntry)> = entries
+        .into_iter()
+        .map(|e| (e.path().is_dir(), e))
+        .collect();
+
+    with_is_dir.sort_by(|(a_is_dir, a), (b_is_dir, b)| {
         match (a_is_dir, b_is_dir) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
@@ -96,7 +100,7 @@ fn sorted_entries(dir: &Path) -> Vec<std::fs::DirEntry> {
         }
     });
 
-    entries
+    with_is_dir.into_iter().map(|(_, e)| e).collect()
 }
 
 /// Generate subtree with proper indentation (limited to 2 levels deep)

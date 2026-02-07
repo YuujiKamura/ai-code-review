@@ -16,6 +16,7 @@ use crate::error::{CodeReviewError, Result};
 use crate::git::get_git_diff;
 use crate::prompt::{build_prompt, build_prompt_with_context, PromptType, DEFAULT_REVIEW_PROMPT};
 use crate::result::ReviewResult;
+use crate::utils::fs::SOURCE_EXTENSIONS;
 
 /// Build the review prompt for a file, handling context gathering and prompt construction.
 ///
@@ -123,8 +124,6 @@ pub(crate) fn perform_review(
 /// Default debounce duration in milliseconds
 const DEFAULT_DEBOUNCE_MS: u64 = 500;
 
-/// Default code extensions to watch
-const DEFAULT_EXTENSIONS: &[&str] = &["rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cpp", "c", "h"];
 
 /// Type alias for review callback
 type ReviewCallback = dyn Fn(ReviewResult) + Send + Sync + 'static;
@@ -174,7 +173,7 @@ impl CodeReviewer {
                 context_enabled: false,
                 context_depth: 50,
             }),
-            extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
+            extensions: SOURCE_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
             debounce_ms: DEFAULT_DEBOUNCE_MS,
             on_review: None,
             watcher: None,

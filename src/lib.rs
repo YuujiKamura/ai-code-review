@@ -84,20 +84,19 @@ mod utils;
 /// ```
 pub use cli_ai_analyzer::Backend;
 pub use context::{
-    gather_context, gather_context_default, gather_raw_context, gather_requirements,
-    DependencyInfo, ProjectContext, RawContext, RelatedFile, RequirementsContext,
+    gather_context, gather_context_default, gather_raw_context, gather_requirements, ProjectContext,
+    RawContext,
 };
-pub use error::{CodeReviewError, Result};
 pub use modules::generate_module_tree;
 pub use prompt::{
     build_analyze_prompt, build_discovery_prompt, build_find_shared_prompt, build_prompt,
-    build_prompt_with_context, format_project_context, format_raw_context, PromptType,
-    ANALYZE_PROMPT, ARCHITECTURE_REVIEW_PROMPT, ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT,
-    DEFAULT_REVIEW_PROMPT, DISCOVERY_PROMPT, FIND_SHARED_PROMPT, HOLISTIC_REVIEW_PROMPT,
-    QUICK_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT,
+    build_prompt_with_context, PromptType, ANALYZE_PROMPT, ARCHITECTURE_REVIEW_PROMPT,
+    ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT, DEFAULT_REVIEW_PROMPT, DISCOVERY_PROMPT,
+    FIND_SHARED_PROMPT, QUICK_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT,
 };
 pub use result::{ReviewResult, ReviewSeverity, ReviewSummary};
 pub use reviewer::CodeReviewer;
+pub use utils::fs::SOURCE_EXTENSIONS;
 
 #[cfg(test)]
 mod tests {

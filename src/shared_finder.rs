@@ -2,17 +2,11 @@
 //!
 //! Scans two project directories and identifies potential shared/duplicated code.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::parser::analyze_file;
-use crate::utils::fs::walk_source_files;
-
-/// Source file extensions to scan
-const SCAN_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "cpp", "c", "h", "hpp",
-    "json", "toml", "yaml", "yml",
-];
+use crate::utils::fs::{walk_source_files, CONFIG_EXTENSIONS, SOURCE_EXTENSIONS};
 
 /// A candidate pair of files/symbols that may be shared between two projects
 #[derive(Debug, Clone)]
@@ -96,8 +90,13 @@ impl SharedReport {
 
 /// Find shared code candidates between two project directories
 pub fn find_shared_candidates(path_a: &Path, path_b: &Path) -> SharedReport {
-    let files_a = walk_source_files(path_a, SCAN_EXTENSIONS);
-    let files_b = walk_source_files(path_b, SCAN_EXTENSIONS);
+    let scan_ext: Vec<&str> = SOURCE_EXTENSIONS
+        .iter()
+        .chain(CONFIG_EXTENSIONS.iter())
+        .copied()
+        .collect();
+    let files_a = walk_source_files(path_a, &scan_ext);
+    let files_b = walk_source_files(path_b, &scan_ext);
 
     let mut candidates = Vec::new();
 
@@ -455,30 +454,29 @@ fn content_similarity(path_a: &Path, path_b: &Path) -> f64 {
 
 /// Remove duplicate candidates (same file pair, keep highest similarity)
 fn dedup_candidates(candidates: &mut Vec<SharedCandidate>) {
-    let mut seen: HashMap<(String, String), usize> = HashMap::new();
-    let mut to_remove = Vec::new();
-
+    // First pass: find the best index for each (path_a, path_b) pair
+    let mut best: HashMap<(String, String), (usize, f64)> = HashMap::new();
     for (i, c) in candidates.iter().enumerate() {
         let key = (c.path_a.clone(), c.path_b.clone());
-        if let Some(&prev_idx) = seen.get(&key) {
-            // Keep the one with higher similarity
-            if candidates[prev_idx].similarity >= c.similarity {
-                to_remove.push(i);
-            } else {
-                to_remove.push(prev_idx);
-                seen.insert(key, i);
+        match best.entry(key) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert((i, c.similarity));
             }
-        } else {
-            seen.insert(key, i);
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                if c.similarity > e.get().1 {
+                    e.insert((i, c.similarity));
+                }
+            }
         }
     }
 
-    // Remove in reverse order to preserve indices
-    to_remove.sort_unstable();
-    to_remove.dedup();
-    for idx in to_remove.into_iter().rev() {
-        candidates.remove(idx);
-    }
+    let keep: HashSet<usize> = best.values().map(|(i, _)| *i).collect();
+    let mut idx = 0;
+    candidates.retain(|_| {
+        let k = keep.contains(&idx);
+        idx += 1;
+        k
+    });
 }
 
 #[cfg(test)]
