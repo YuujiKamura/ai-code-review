@@ -67,6 +67,7 @@ mod parser;
 mod prompt;
 mod result;
 mod reviewer;
+pub mod shared_finder;
 mod utils;
 
 /// Re-export of `Backend` from `cli_ai_analyzer` for convenience.
@@ -89,11 +90,11 @@ pub use context::{
 pub use error::{CodeReviewError, Result};
 pub use modules::generate_module_tree;
 pub use prompt::{
-    build_analyze_prompt, build_discovery_prompt, build_prompt, build_prompt_with_context,
-    format_project_context, format_raw_context, PromptType, ANALYZE_PROMPT,
-    ARCHITECTURE_REVIEW_PROMPT, ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT,
-    DEFAULT_REVIEW_PROMPT, DISCOVERY_PROMPT, HOLISTIC_REVIEW_PROMPT, QUICK_REVIEW_PROMPT,
-    SECURITY_REVIEW_PROMPT,
+    build_analyze_prompt, build_discovery_prompt, build_find_shared_prompt, build_prompt,
+    build_prompt_with_context, format_project_context, format_raw_context, PromptType,
+    ANALYZE_PROMPT, ARCHITECTURE_REVIEW_PROMPT, ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT,
+    DEFAULT_REVIEW_PROMPT, DISCOVERY_PROMPT, FIND_SHARED_PROMPT, HOLISTIC_REVIEW_PROMPT,
+    QUICK_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT,
 };
 pub use result::{ReviewResult, ReviewSeverity, ReviewSummary};
 pub use reviewer::CodeReviewer;

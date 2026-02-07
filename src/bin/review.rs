@@ -8,8 +8,10 @@
 //!   review --hook-install   - Install git pre-commit hook
 
 use ai_code_review::{
-    build_analyze_prompt, build_discovery_prompt, gather_raw_context, generate_module_tree,
-    Backend, CodeReviewer, PromptType, ANALYZE_PROMPT, DISCOVERY_PROMPT,
+    build_analyze_prompt, build_discovery_prompt, build_find_shared_prompt,
+    gather_raw_context, generate_module_tree,
+    shared_finder::find_shared_candidates,
+    Backend, CodeReviewer, PromptType, ANALYZE_PROMPT, DISCOVERY_PROMPT, FIND_SHARED_PROMPT,
 };
 use cli_ai_analyzer::{prompt as ai_prompt, AnalyzeOptions};
 use std::path::{Path, PathBuf};
@@ -27,6 +29,7 @@ fn main() {
         eprintln!("  --analyze <f>  Analyze file with AI (no AST parsing, AI does the work)");
         eprintln!("  --hook         Pre-commit hook mode (review staged diff)");
         eprintln!("  --hook-install Install git pre-commit hook");
+        eprintln!("  --find-shared <dirA> <dirB>  Find shared/duplicated code between two projects");
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --backend <gemini|claude>  AI backend (default: gemini)");
@@ -98,6 +101,16 @@ fn main() {
                     prompt_type = PromptType::Analyze;
                 }
             }
+            "--find-shared" => {
+                i += 1;
+                if i + 1 < args.len() {
+                    mode = Mode::FindShared(PathBuf::from(&args[i]), PathBuf::from(&args[i + 1]));
+                    i += 1;
+                } else {
+                    eprintln!("Error: --find-shared requires two directory paths");
+                    std::process::exit(1);
+                }
+            }
             "--goal" => {
                 i += 1;
                 if i < args.len() {
@@ -149,6 +162,9 @@ fn main() {
         Mode::Analyze(path) => {
             analyze_with_ai(&path, backend);
         }
+        Mode::FindShared(path_a, path_b) => {
+            find_shared_modules(&path_a, &path_b, backend);
+        }
         Mode::Hook => {
             run_hook(backend);
         }
@@ -164,8 +180,9 @@ enum Mode {
     Diff,
     Discover(String), // goal
     Analyze(PathBuf), // file to analyze with AI
-    Hook,             // Pre-commit hook mode
-    HookInstall,      // Install git pre-commit hook
+    Hook,                        // Pre-commit hook mode
+    HookInstall,                 // Install git pre-commit hook
+    FindShared(PathBuf, PathBuf), // (path_a, path_b)
 }
 
 fn review_file(path: &Path, backend: Backend, prompt_type: PromptType, context_enabled: bool) {
@@ -460,6 +477,55 @@ fn discover_architecture(goal: &str, backend: Backend) {
     }
 }
 
+
+fn find_shared_modules(path_a: &Path, path_b: &Path, backend: Backend) {
+    if !path_a.exists() {
+        eprintln!("Error: Directory not found: {:?}", path_a);
+        std::process::exit(1);
+    }
+    if !path_b.exists() {
+        eprintln!("Error: Directory not found: {:?}", path_b);
+        std::process::exit(1);
+    }
+
+    eprintln!("=== Shared Code Discovery ===");
+    eprintln!("Project A: {}", path_a.display());
+    eprintln!("Project B: {}", path_b.display());
+    eprintln!();
+
+    // Phase 1: Static analysis
+    let report = find_shared_candidates(path_a, path_b);
+
+    eprintln!(
+        "Scanned: {} files (A) + {} files (B)",
+        report.files_scanned_a, report.files_scanned_b
+    );
+    eprintln!("Found {} candidates\n", report.candidates.len());
+
+    if report.candidates.is_empty() {
+        println!("共有候補は見つかりませんでした。");
+        return;
+    }
+
+    // Print static analysis results
+    let report_text = report.to_prompt_string();
+    println!("{}", report_text);
+
+    // Phase 2: AI analysis
+    eprintln!("--- AI Analysis ---\n");
+    let prompt = build_find_shared_prompt(FIND_SHARED_PROMPT, &report_text);
+    let options = AnalyzeOptions::default().with_backend(backend);
+
+    match ai_prompt(&prompt, options) {
+        Ok(response) => {
+            println!("{}", response);
+        }
+        Err(e) => {
+            eprintln!("AI analysis failed: {}", e);
+            eprintln!("(Static analysis results are shown above)");
+        }
+    }
+}
 
 fn run_hook(backend: Backend) {
     let _cwd = std::env::current_dir().unwrap_or_default();

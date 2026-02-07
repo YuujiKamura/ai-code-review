@@ -164,6 +164,43 @@ src/
 2. ...
 "#;
 
+/// Shared code discovery prompt - analyzes cross-project sharing opportunities
+pub const FIND_SHARED_PROMPT: &str = r#"以下は2つのプロジェクト間の共有コード候補の分析結果です。
+
+{context}
+
+## 分析してほしいこと
+
+各候補について以下を判断してください：
+
+1. **共通化すべきか** - 両プロジェクトで同じロジック/データを持つべきでない場合
+   - 共通ライブラリに切り出すべき（変更時に両方更新が必要になるリスク）
+   - 設定ファイル（JSON等）として外部化して共有すべき
+   - そのまま別々に持つのが適切（偶然の類似に過ぎない）
+
+2. **優先度** - 高/中/低
+   - 高: 頻繁に変更される or バグの温床になる重複
+   - 中: たまに変更される or 一致させ忘れるリスク
+   - 低: 安定していてほぼ変更されない
+
+3. **具体的なアクション提案**
+   - どのファイルをどう統合するか
+   - 共通モジュールの配置場所
+
+## 出力形式
+
+### 共通化推奨
+- 🔄 [高] 具体的な提案
+- 🔄 [中] 具体的な提案
+
+### 現状維持
+- ✓ 理由
+
+### 次のステップ
+1. 最初にやるべきこと
+2. 次にやるべきこと
+"#;
+
 /// Holistic review prompt - checks code against project requirements
 pub const HOLISTIC_REVIEW_PROMPT: &str = r#"以下のコードを、プロジェクト全体の文脈からレビューしてください。
 
@@ -253,6 +290,11 @@ pub fn build_discovery_prompt(template: &str, goal: &str, structure: &str) -> St
 
 /// Build an analyze prompt with raw context
 pub fn build_analyze_prompt(template: &str, context: &str) -> String {
+    template.replace("{context}", context)
+}
+
+/// Build a find-shared prompt with analysis context
+pub fn build_find_shared_prompt(template: &str, context: &str) -> String {
     template.replace("{context}", context)
 }
 
