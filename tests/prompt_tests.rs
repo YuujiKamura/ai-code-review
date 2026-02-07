@@ -56,7 +56,8 @@ fn test_architecture_prompt_structure() {
     assert!(prompt.contains("service.rs"));
     assert!(prompt.contains("単一責任の原則"));
     assert!(prompt.contains("依存関係"));
-    assert!(prompt.contains("結合度"));
+    assert!(prompt.contains("疎結合"));
+    assert!(prompt.contains("高凝集"));
 }
 
 #[test]
