@@ -25,7 +25,7 @@ fn test_default_prompt_structure() {
 
     assert!(prompt.contains("test.rs"));
     assert!(prompt.contains("let x = 1;"));
-    assert!(prompt.contains("設計・アーキテクチャ"));
+    assert!(prompt.contains("設計・結合の均衡"));
     assert!(prompt.contains("コード品質"));
     assert!(prompt.contains("バグ・セキュリティ"));
 }
@@ -56,8 +56,9 @@ fn test_architecture_prompt_structure() {
     assert!(prompt.contains("service.rs"));
     assert!(prompt.contains("単一責任の原則"));
     assert!(prompt.contains("依存関係"));
-    assert!(prompt.contains("疎結合"));
+    assert!(prompt.contains("結合の均衡"));
     assert!(prompt.contains("高凝集"));
+    assert!(prompt.contains("変動性"));
 }
 
 #[test]
