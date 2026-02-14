@@ -173,25 +173,260 @@ pub const PRINCIPLES_REVIEW_PROMPT: &str = r#"以下のコードを、コーデ�
 {content}
 ```
 
-## チェック項目（違反がある場合のみ指摘）
+## チェック項目（違反がある場合のみ指摘。各原則のBad/Good例を参考に判断せよ）
 
-### 構造・責務
-1. **DRY** — 同じ知識・ロジックが複数箇所に重複していないか
-2. **SRP（単一責任）** — 1つのモジュール/関数が複数の責務を持っていないか
-3. **関心の分離** — UI/ビジネスロジック/データアクセスが混在していないか
-4. **高凝集・疎結合** — 関連する処理がまとまっているか、モジュール間の依存は最小か
+### 1. DRY（Don't Repeat Yourself）
+同じ知識・ロジックが複数箇所に重複していないか。
 
-### 設計判断
-5. **Tell, don't Ask** — オブジェクトに状態を問い合わせて外で判断していないか（判断はオブジェクト自身に委譲すべき）
-6. **Composition over Inheritance** — 継承で解決しているが委譲の方が適切なケースはないか
-7. **依存性逆転（DIP）** — 具象クラスに直接依存していないか（抽象に依存すべき）
-8. **開放閉鎖（OCP）** — 新しい種類を追加するたびに既存コードを修正する構造になっていないか
+Bad: 重複したバリデーション
+```
+class User { validates :email, presence: true, format: EMAIL_REGEXP }
+class Admin { validates :email, presence: true, format: EMAIL_REGEXP }
+```
+Good: 共通化
+```
+module EmailValidatable
+  included { validates :email, presence: true, format: EMAIL_REGEXP }
+end
+```
 
-### 表現・可読性
-9. **デメテルの法則** — `a.b.c.d` のようなメソッドチェーンで他のオブジェクトの内部構造に依存していないか
-10. **KISS** — 不必要に複雑な実装になっていないか（シンプルな方法で書けるのに遠回りしていないか）
-11. **YAGNI** — 現時点で不要な機能・抽象化を先回りして実装していないか
-12. **CQS（コマンドクエリ分離）** — 状態変更と値の取得を同時に行うメソッドがないか
+### 2. Tell, don't Ask
+オブジェクトに状態を問い合わせて外で判断していないか。判断はオブジェクト自身に委譲すべき。
+
+Bad: 外で判断
+```
+if user.admin? then user.grant_access else user.deny_access end
+```
+Good: オブジェクトに委譲
+```
+user.handle_access_request
+# User内部で admin? を判断して grant/deny を決定
+```
+
+### 3. SRP（単一責任の原則）
+1つのクラス/モジュールが複数の責務を持っていないか。
+
+Bad: 複数責務
+```
+class User
+  def save_to_database ... end  # データ永続化
+  def send_welcome_email ... end  # メール送信
+  def generate_report ... end  # レポート生成
+end
+```
+Good: 責務を分離
+```
+class User ... end           # ユーザー情報管理のみ
+class UserMailer ... end     # メール送信専用
+class UserReportGenerator ... end  # レポート生成専用
+```
+
+### 4. OCP（開放閉鎖の原則）
+新しい種類を追加するたびに既存コードを修正する構造（if/else連鎖）になっていないか。
+
+Bad: 修正のたびにクラスを変更
+```
+fn calculate(customer_type: &str) -> f64 {
+    if customer_type == "Regular" { price }
+    else if customer_type == "Premium" { price * 0.9 }
+    else if customer_type == "VIP" { price * 0.8 }
+    // 新しい顧客タイプが増えるたびに修正が必要
+}
+```
+Good: 拡張に開放、修正に閉鎖（ストラテジーパターン）
+```
+trait PricingStrategy { fn calculate(&self, base: f64) -> f64; }
+struct RegularPricing;
+impl PricingStrategy for RegularPricing { fn calculate(&self, base: f64) -> f64 { base } }
+struct PremiumPricing;
+impl PricingStrategy for PremiumPricing { fn calculate(&self, base: f64) -> f64 { base * 0.9 } }
+```
+
+### 5. LSP（リスコフの置換原則）
+親の型を子の型で置換したとき、動作が破綻しないか。
+
+Bad: 置換すると動作が壊れる
+```
+// Square extends Rectangle だが、Width設定時にHeightも変わる
+// → Rectangle として使うと面積計算が期待と異なる
+```
+Good: 適切な抽象化
+```
+abstract class Shape { abstract area(): number }
+class Rectangle extends Shape { ... }
+class Square extends Shape { ... }  // 独立した実装
+```
+
+### 6. ISP（インターフェース分離の原則）
+クライアントが使わないメソッドに依存させられていないか。
+
+Bad: 大きすぎるインターフェース
+```
+trait Worker { fn work(); fn eat(); fn sleep(); }
+// ロボットは eat/sleep を実装できない
+```
+Good: 責務ごとに分離
+```
+trait Workable { fn work(); }
+trait Feedable { fn eat(); }
+trait Sleepable { fn sleep(); }
+```
+
+### 7. DIP（依存性逆転の原則）
+具象クラスに直接依存していないか。抽象（trait/interface）に依存すべき。
+
+Bad: 具象に直接依存
+```
+struct OrderProcessor {
+    repository: MySqlRepository,  // 具象型
+    email: SmtpEmailService,      // 具象型
+}
+```
+Good: 抽象に依存
+```
+struct OrderProcessor {
+    repository: Box<dyn Repository>,    // trait object
+    email: Box<dyn EmailService>,       // trait object
+}
+```
+
+### 8. Composition over Inheritance（継承より委譲）
+継承で解決しているが委譲の方が適切なケースはないか。
+
+Bad: 継承の乱用
+```
+class FlyingCar extends Car implements Flyable { ... }
+```
+Good: 委譲
+```
+struct FlyingCar { car: Car, flight: FlightSystem }
+fn drive(&self) { self.car.drive() }
+fn fly(&self) { self.flight.take_off() }
+```
+
+### 9. デメテルの法則（最小知識の原則）
+`a.b.c.d` のようなチェーンで他のオブジェクトの内部構造に依存していないか。
+
+Bad: チェーンが長い
+```
+customer.address.city.postal_code
+```
+Good: 適切な委譲
+```
+customer.postal_code()
+// Customer内部で address?.postal_code を返す
+```
+
+### 10. 高凝集・疎結合（GRASP）
+関連する処理がまとまっているか（高凝集）。モジュール間の依存は最小か（疎結合）。
+
+Bad: 低凝集（無関係な責務が混在）
+```
+class User {
+  fn save_to_database() ...  // データ永続化
+  fn send_email() ...        // メール
+  fn calculate_tax() ...     // 税金計算
+  fn format_address() ...    // 住所フォーマット
+}
+```
+Good: 高凝集（ユーザー情報管理に集中）
+```
+class User { fn full_name(); fn age(); fn adult?(); }
+class UserPersistence { fn save(user); }    // 永続化は別クラス
+class UserNotifier { fn send_welcome(user); }  // 通知は別クラス
+```
+
+### 11. KISS（Keep It Simple, Stupid）
+不必要に複雑な実装になっていないか。シンプルな方法で書けるのに遠回りしていないか。
+
+Bad: 複雑な条件分岐のネスト
+```
+if user.premium? && product.category == 'electronics' &&
+   ['winter','summer'].include?(season) && ['sat','sun'].include?(day)
+  product.price * 0.2
+elsif user.regular? && product.on_sale? && season == 'spring'
+  product.price * 0.1
+# ... さらに続く
+```
+Good: 戦略パターンで分離
+```
+strategies = find_applicable_strategies(user, product, context)
+strategies.map(&:discount).max || 0
+```
+
+### 12. YAGNI（You Aren't Gonna Need It）
+現時点で不要な機能・抽象化を先回りして実装していないか。
+
+Bad: 「将来使うかも」で先回り実装
+```
+struct User {
+    first_name: String, last_name: String, email: String,
+    middle_name: String,           // 不要
+    alternative_emails: Vec<String>, // 不要
+    login_count: u32,              // 不要
+    preferred_language: String,    // 不要
+    timezone: String,              // 不要
+}
+```
+Good: 現在必要な機能のみ
+```
+struct User { first_name: String, last_name: String, email: String }
+// 必要になったら追加する
+```
+
+### 13. CQS（コマンドクエリ分離）
+状態変更と値の取得を同時に行うメソッドがないか。
+
+Bad: 状態変更と取得が混在
+```
+fn pop(&mut self) -> T {
+    let value = self.stack.last().unwrap();  // 取得
+    self.stack.pop();                         // 状態変更
+    value
+}
+```
+Good: 分離
+```
+fn peek(&self) -> &T { self.stack.last().unwrap() }  // クエリのみ
+fn pop(&mut self) { self.stack.pop(); }               // コマンドのみ
+```
+
+### 14. 関心の分離（Separation of Concerns）
+UI/ビジネスロジック/データアクセスが混在していないか。
+
+Bad: 全部が1つのハンドラに混在
+```
+fn create_user(req) {
+    // バリデーション + DB保存 + メール送信 が全部ここにある
+    if email.is_empty() { return error; }
+    db.save(user);
+    mailer.send(user.email);
+}
+```
+Good: 層ごとに分離
+```
+// Controller: リクエスト処理のみ
+// Service: ビジネスロジック
+// Repository: データアクセス
+fn create_user(req) { service.create_user(req) }
+```
+
+### 15. IoC（制御の反転）
+オブジェクト自身が依存関係を生成していないか。外部から注入すべき。
+
+Bad: 内部で依存を生成
+```
+struct OrderService {
+    fn new() -> Self {
+        Self { repo: SqlRepository::new(), email: SmtpService::new() }
+    }
+}
+```
+Good: 外部から注入
+```
+struct OrderService { repo: Box<dyn Repository>, email: Box<dyn EmailService> }
+fn new(repo: impl Repository, email: impl EmailService) -> Self { ... }
+```
 
 ## 出力形式
 
@@ -200,8 +435,7 @@ pub const PRINCIPLES_REVIEW_PROMPT: &str = r#"以下のコードを、コーデ�
 - 💡 原則に基づく改善提案
 - ✓ 主要原則に違反なし
 
-各指摘には「どの原則に違反しているか」を明記し、Before/Afterの方向性を示すこと。
-簡潔に（10行以内）。"#;
+各指摘には「どの原則（番号と名前）に違反しているか」を明記し、対象コードのBefore/After方向性を示すこと。"#;
 
 /// Shared code discovery prompt - analyzes cross-project sharing opportunities
 pub const FIND_SHARED_PROMPT: &str = r#"以下は2つのプロジェクト間の共有コード候補の分析結果です。
