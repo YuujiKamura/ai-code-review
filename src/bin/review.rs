@@ -34,7 +34,7 @@ fn main() {
         eprintln!();
         eprintln!("Options:");
         eprintln!("  --backend <gemini|claude>  AI backend (default: gemini)");
-        eprintln!("  --prompt <default|quick|security|architecture|holistic|discovery|analyze>");
+        eprintln!("  --prompt <default|quick|security|architecture|holistic|principles|discovery|analyze>");
         eprintln!("  --context                  Enable project context (module tree, dependencies)");
         eprintln!("  --goal <text>              Project goal for discovery mode");
         std::process::exit(1);
@@ -67,6 +67,7 @@ fn main() {
                         "security" => PromptType::Security,
                         "architecture" => PromptType::Architecture,
                         "holistic" => PromptType::Holistic,
+                        "principles" => PromptType::Principles,
                         "discovery" => PromptType::Discovery,
                         "analyze" => PromptType::Analyze,
                         _ => PromptType::Default,

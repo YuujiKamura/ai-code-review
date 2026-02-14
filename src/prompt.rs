@@ -164,6 +164,45 @@ src/
 2. ...
 "#;
 
+/// Coding principles review prompt - checks against well-known design principles
+pub const PRINCIPLES_REVIEW_PROMPT: &str = r#"以下のコードを、コーディング原則の観点からレビューしてください。
+
+ファイル: {file_name}
+
+```
+{content}
+```
+
+## チェック項目（違反がある場合のみ指摘）
+
+### 構造・責務
+1. **DRY** — 同じ知識・ロジックが複数箇所に重複していないか
+2. **SRP（単一責任）** — 1つのモジュール/関数が複数の責務を持っていないか
+3. **関心の分離** — UI/ビジネスロジック/データアクセスが混在していないか
+4. **高凝集・疎結合** — 関連する処理がまとまっているか、モジュール間の依存は最小か
+
+### 設計判断
+5. **Tell, don't Ask** — オブジェクトに状態を問い合わせて外で判断していないか（判断はオブジェクト自身に委譲すべき）
+6. **Composition over Inheritance** — 継承で解決しているが委譲の方が適切なケースはないか
+7. **依存性逆転（DIP）** — 具象クラスに直接依存していないか（抽象に依存すべき）
+8. **開放閉鎖（OCP）** — 新しい種類を追加するたびに既存コードを修正する構造になっていないか
+
+### 表現・可読性
+9. **デメテルの法則** — `a.b.c.d` のようなメソッドチェーンで他のオブジェクトの内部構造に依存していないか
+10. **KISS** — 不必要に複雑な実装になっていないか（シンプルな方法で書けるのに遠回りしていないか）
+11. **YAGNI** — 現時点で不要な機能・抽象化を先回りして実装していないか
+12. **CQS（コマンドクエリ分離）** — 状態変更と値の取得を同時に行うメソッドがないか
+
+## 出力形式
+
+- 🚨 原則違反（重大: 保守性・拡張性に直接影響）
+- ⚠ 原則違反（軽微: 改善推奨）
+- 💡 原則に基づく改善提案
+- ✓ 主要原則に違反なし
+
+各指摘には「どの原則に違反しているか」を明記し、Before/Afterの方向性を示すこと。
+簡潔に（10行以内）。"#;
+
 /// Shared code discovery prompt - analyzes cross-project sharing opportunities
 pub const FIND_SHARED_PROMPT: &str = r#"以下は2つのプロジェクト間の共有コード候補の分析結果です。
 
@@ -316,6 +355,8 @@ pub enum PromptType {
     Discovery,
     /// Analyze - let AI analyze code structure (minimal parsing, AI does the work)
     Analyze,
+    /// Coding principles review (DRY, SOLID, GRASP, KISS, YAGNI, etc.)
+    Principles,
     /// Custom prompt
     Custom,
 }
@@ -329,6 +370,7 @@ impl PromptType {
             PromptType::Security => SECURITY_REVIEW_PROMPT,
             PromptType::Architecture => ARCHITECTURE_REVIEW_PROMPT,
             PromptType::Holistic => HOLISTIC_REVIEW_PROMPT,
+            PromptType::Principles => PRINCIPLES_REVIEW_PROMPT,
             PromptType::Discovery => DISCOVERY_PROMPT,
             PromptType::Analyze => ANALYZE_PROMPT,
             PromptType::Custom => "", // Custom prompts provide their own template
@@ -486,6 +528,7 @@ mod tests {
         assert!(!PromptType::Security.template().is_empty());
         assert!(!PromptType::Architecture.template().is_empty());
         assert!(!PromptType::Holistic.template().is_empty());
+        assert!(!PromptType::Principles.template().is_empty());
         assert!(PromptType::Custom.template().is_empty());
     }
 
