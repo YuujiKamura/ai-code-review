@@ -346,13 +346,12 @@ fn find_modified_files(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
                 })
                 .collect();
 
-            if !files.is_empty() {
-                return files;
-            }
+            // git repoだが変更ファイルが0件 → 空を返す（全走査フォールバックしない）
+            return files;
         }
     }
 
-    // Fallback to all files if not in git repo
+    // git repoではない場合のみ全ファイル走査
     find_files(dir, extensions)
 }
 
