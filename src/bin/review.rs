@@ -9,25 +9,32 @@
 
 use ai_code_review::{
     build_analyze_prompt, build_discovery_prompt, build_find_shared_prompt,
-    gather_raw_context, generate_module_tree,
+    build_investigate_prompt, gather_raw_context, generate_module_tree,
     shared_finder::find_shared_candidates,
-    Backend, CodeReviewer, PromptType, ANALYZE_PROMPT, DISCOVERY_PROMPT, FIND_SHARED_PROMPT,
-    SOURCE_EXTENSIONS,
+    walk_source_files, Backend, CodeReviewer, PromptType, ANALYZE_PROMPT, DISCOVERY_PROMPT,
+    FIND_SHARED_PROMPT, INVESTIGATE_PROMPT, SOURCE_EXTENSIONS,
 };
 use cli_ai_analyzer::{prompt as ai_prompt, AnalyzeOptions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    // Force UTF-8 output on Windows (prevents cp932 garbling when called from Python/hooks)
+    #[cfg(target_os = "windows")]
+    unsafe {
+        windows_sys::Win32::System::Console::SetConsoleOutputCP(65001);
+    }
+
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: review <file|--dir <dir>|--diff|--discover|--analyze|--hook>");
+        eprintln!("Usage: review <file|--dir <dir>|--diff|--discover|--analyze|--investigate|--hook>");
         eprintln!("  <file>         Review a single file");
         eprintln!("  --dir <dir>    Review all source files in directory");
         eprintln!("  --diff         Review git diff (changed files)");
         eprintln!("  --discover     Discovery mode (requires --goal)");
         eprintln!("  --analyze <f>  Analyze file with AI (no AST parsing, AI does the work)");
+        eprintln!("  --investigate <dir>  Cross-file investigation (requires --question)");
         eprintln!("  --hook         Pre-commit hook mode (review staged diff)");
         eprintln!("  --hook-install Install git pre-commit hook");
         eprintln!("  --find-shared <dirA> <dirB>  Find shared/duplicated code between two projects");
@@ -37,6 +44,7 @@ fn main() {
         eprintln!("  --prompt <default|quick|security|architecture|holistic|principles|discovery|analyze>");
         eprintln!("  --context                  Enable project context (module tree, dependencies)");
         eprintln!("  --goal <text>              Project goal for discovery mode");
+        eprintln!("  --question <text>          Investigation question for --investigate mode");
         std::process::exit(1);
     }
 
@@ -46,6 +54,7 @@ fn main() {
     let mut mode = Mode::File(PathBuf::new());
     let mut context_enabled = false;
     let mut goal: Option<String> = None;
+    let mut question: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -103,6 +112,21 @@ fn main() {
                     prompt_type = PromptType::Analyze;
                 }
             }
+            "--investigate" => {
+                i += 1;
+                if i < args.len() {
+                    mode = Mode::Investigate(PathBuf::from(&args[i]), String::new());
+                } else {
+                    eprintln!("Error: --investigate requires a directory path");
+                    std::process::exit(1);
+                }
+            }
+            "--question" => {
+                i += 1;
+                if i < args.len() {
+                    question = Some(args[i].clone());
+                }
+            }
             "--find-shared" => {
                 i += 1;
                 if i + 1 < args.len() {
@@ -144,6 +168,19 @@ fn main() {
         }
     }
 
+    // Handle --investigate mode
+    if let Mode::Investigate(dir, _) = &mode {
+        match question {
+            Some(q) => {
+                mode = Mode::Investigate(dir.clone(), q);
+            }
+            None => {
+                eprintln!("Error: --investigate requires --question <text>");
+                std::process::exit(1);
+            }
+        }
+    }
+
     match mode {
         Mode::File(path) => {
             if path.as_os_str().is_empty() {
@@ -164,11 +201,14 @@ fn main() {
         Mode::Analyze(path) => {
             analyze_with_ai(&path, backend);
         }
+        Mode::Investigate(dir, question) => {
+            investigate_codebase(&dir, &question, backend);
+        }
         Mode::FindShared(path_a, path_b) => {
             find_shared_modules(&path_a, &path_b, backend);
         }
         Mode::Hook => {
-            run_hook(backend);
+            run_hook(backend, prompt_type, context_enabled);
         }
         Mode::HookInstall => {
             install_hook();
@@ -180,11 +220,12 @@ enum Mode {
     File(PathBuf),
     Dir(PathBuf),
     Diff,
-    Discover(String), // goal
-    Analyze(PathBuf), // file to analyze with AI
-    Hook,                        // Pre-commit hook mode
-    HookInstall,                 // Install git pre-commit hook
-    FindShared(PathBuf, PathBuf), // (path_a, path_b)
+    Discover(String),              // goal
+    Analyze(PathBuf),              // file to analyze with AI
+    Investigate(PathBuf, String),  // (dir, question)
+    Hook,                          // Pre-commit hook mode
+    HookInstall,                   // Install git pre-commit hook
+    FindShared(PathBuf, PathBuf),  // (path_a, path_b)
 }
 
 fn review_file(path: &Path, backend: Backend, prompt_type: PromptType, context_enabled: bool) {
@@ -242,6 +283,9 @@ fn review_directory(dir: &Path, backend: Backend, prompt_type: PromptType, conte
     }
 }
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 fn review_diff(backend: Backend, prompt_type: PromptType, context_enabled: bool) {
     // Get changed files from git
     let output = {
@@ -250,7 +294,7 @@ fn review_diff(backend: Backend, prompt_type: PromptType, context_enabled: bool)
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000);
+            cmd.creation_flags(CREATE_NO_WINDOW);
         }
         cmd.output()
     };
@@ -315,7 +359,7 @@ fn find_modified_files(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
     if let Ok(output) = cmd.output() {
@@ -424,6 +468,57 @@ fn analyze_with_ai(file_path: &Path, backend: Backend) {
     }
 }
 
+fn investigate_codebase(dir: &Path, question: &str, backend: Backend) {
+    if !dir.exists() {
+        eprintln!("Error: Directory not found: {:?}", dir);
+        std::process::exit(1);
+    }
+
+    let files = walk_source_files(dir, SOURCE_EXTENSIONS);
+    if files.is_empty() {
+        eprintln!("No source files found in {:?}", dir);
+        std::process::exit(1);
+    }
+
+    eprintln!("=== Investigation ===");
+    eprintln!("Directory: {}", dir.display());
+    eprintln!("Question: {}", question);
+    eprintln!("Files: {}\n", files.len());
+
+    // Read and concatenate files with per-file truncation
+    const MAX_CHARS_PER_FILE: usize = 5000;
+    let mut context = String::new();
+    for file in &files {
+        let rel = file.strip_prefix(dir).unwrap_or(file);
+        let content = match std::fs::read_to_string(file) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        context.push_str(&format!("### {}\n```\n", rel.display()));
+        if content.len() > MAX_CHARS_PER_FILE {
+            let truncate_at = content.floor_char_boundary(MAX_CHARS_PER_FILE);
+            context.push_str(&content[..truncate_at]);
+            context.push_str("\n... (truncated)");
+        } else {
+            context.push_str(&content);
+        }
+        context.push_str("\n```\n\n");
+    }
+
+    let prompt = build_investigate_prompt(INVESTIGATE_PROMPT, question, &context);
+    let options = AnalyzeOptions::default().with_backend(backend);
+
+    match ai_prompt(&prompt, options) {
+        Ok(response) => {
+            println!("{}", response);
+        }
+        Err(e) => {
+            eprintln!("Investigation failed: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
 fn discover_architecture(goal: &str, backend: Backend) {
     let cwd = std::env::current_dir().unwrap_or_default();
 
@@ -527,8 +622,8 @@ fn find_shared_modules(path_a: &Path, path_b: &Path, backend: Backend) {
     }
 }
 
-fn run_hook(backend: Backend) {
-    let _cwd = std::env::current_dir().unwrap_or_default();
+fn run_hook(backend: Backend, prompt_type: PromptType, context_enabled: bool) {
+    let cwd = std::env::current_dir().unwrap_or_default();
 
     // Get staged diff
     let diff = {
@@ -537,7 +632,7 @@ fn run_hook(backend: Backend) {
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000);
+            cmd.creation_flags(CREATE_NO_WINDOW);
         }
         match cmd.output() {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
@@ -554,28 +649,64 @@ fn run_hook(backend: Backend) {
     let diff_lines: Vec<&str> = diff.lines().collect();
     if diff_lines.len() > 500 {
         eprintln!(
-            "⚠ Diff too large ({} lines), skipping review",
+            "⚠ Diff too large ({} lines) — skipping architecture review.",
             diff_lines.len()
         );
+        eprintln!("  Tip: use pre-commit-review.py for large diffs (Gemini sensitive-data scan).");
+        eprintln!("  Or commit with smaller, focused changesets.");
         return;
     }
 
     eprintln!("=== AI Code Review (Hook) ===");
     eprintln!("Reviewing {} lines...\n", diff_lines.len());
 
-    // Use concise review prompt for hook mode
-    let prompt = format!(
-        "Code review of staged changes. If critical issues found, start line with ⚠. If OK, respond ✓ LGTM. Be concise.\n\nFocus: design flaws, bugs, security issues.\n\n```diff\n{}\n```",
-        diff
-    );
+    // Build prompt based on prompt_type
+    let context_str = if context_enabled {
+        // Gather project context from module tree
+        let src_dir = if cwd.join("src").exists() {
+            cwd.join("src")
+        } else {
+            cwd.clone()
+        };
+        let tree = generate_module_tree(&src_dir, Path::new(""));
+        if tree.is_empty() {
+            String::new()
+        } else {
+            format!("## プロジェクト構造\n```\n{}\n```\n\n", tree)
+        }
+    } else {
+        String::new()
+    };
+
+    let prompt = match prompt_type {
+        PromptType::Default => {
+            format!(
+                "Code review of staged changes. If critical issues found, start line with ⚠. If OK, respond ✓ LGTM. Be concise.\n\nFocus: design flaws, bugs, security issues.\n\n```diff\n{}\n```",
+                diff
+            )
+        }
+        _ => {
+            let template = prompt_type.template();
+            let replaced = template
+                .replace("{file_name}", "staged changes (git diff --cached)")
+                .replace("{content}", &format!("{}{}", context_str, diff))
+                .replace("{context}", &context_str)
+                .replace("{code}", &diff);
+            format!(
+                "Review staged diff. If critical issues, start with ⚠. If OK, ✓ LGTM. Be concise.\n\n{}\n\n```diff\n{}\n```",
+                replaced, diff
+            )
+        }
+    };
 
     let options = AnalyzeOptions::default().with_backend(backend);
     match ai_prompt(&prompt, options) {
         Ok(review) => {
             eprintln!("{}\n", review);
             eprintln!("=== Review Complete ===\n");
-            if review.contains("⚠") {
-                eprintln!("[BLOCKED] Fix issues above before committing.");
+            // Block on critical issues (🚨) only. Architecture warnings (⚠/💡) are informational.
+            if review.contains("🚨") {
+                eprintln!("[BLOCKED] Critical issues found. Fix before committing.");
                 std::process::exit(1);
             }
         }

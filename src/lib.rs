@@ -89,14 +89,15 @@ pub use context::{
 };
 pub use modules::generate_module_tree;
 pub use prompt::{
-    build_analyze_prompt, build_discovery_prompt, build_find_shared_prompt, build_prompt,
-    build_prompt_with_context, PromptType, ANALYZE_PROMPT, ARCHITECTURE_REVIEW_PROMPT,
-    ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT, DEFAULT_REVIEW_PROMPT, DISCOVERY_PROMPT,
-    FIND_SHARED_PROMPT, PRINCIPLES_REVIEW_PROMPT, QUICK_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT,
+    build_analyze_prompt, build_discovery_prompt, build_find_shared_prompt,
+    build_investigate_prompt, build_prompt, build_prompt_with_context, PromptType,
+    ANALYZE_PROMPT, ARCHITECTURE_REVIEW_PROMPT, ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT,
+    DEFAULT_REVIEW_PROMPT, DISCOVERY_PROMPT, FIND_SHARED_PROMPT, INVESTIGATE_PROMPT,
+    PRINCIPLES_REVIEW_PROMPT, QUICK_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT,
 };
 pub use result::{ReviewResult, ReviewSeverity, ReviewSummary};
 pub use reviewer::CodeReviewer;
-pub use utils::fs::SOURCE_EXTENSIONS;
+pub use utils::fs::{walk_source_files, SOURCE_EXTENSIONS};
 
 #[cfg(test)]
 mod tests {

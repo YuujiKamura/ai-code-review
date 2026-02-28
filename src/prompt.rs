@@ -437,6 +437,29 @@ fn new(repo: impl Repository, email: impl EmailService) -> Self { ... }
 
 各指摘には「どの原則（番号と名前）に違反しているか」を明記し、対象コードのBefore/After方向性を示すこと。"#;
 
+/// Investigate prompt - cross-file investigation driven by a user question
+pub const INVESTIGATE_PROMPT: &str = r#"以下のコードベースについて、ユーザーの疑問を調査してください。
+
+## 調査対象の質問
+{question}
+
+## コードベース
+{context}
+
+## 調査方針
+1. 質問に関連するデータフロー・型定義・API呼び出しを追跡
+2. ファイル間の宣言と使用の不整合を特定
+3. 期待される振る舞いと実際のコードの差異を報告
+
+## 出力形式
+### 調査結果
+- 発見事項をファイル名:行番号付きで報告
+### 結論
+- 問題の根本原因を簡潔に述べる
+### 推奨アクション
+- 具体的な修正案（あれば）
+"#;
+
 /// Shared code discovery prompt - analyzes cross-project sharing opportunities
 pub const FIND_SHARED_PROMPT: &str = r#"以下は2つのプロジェクト間の共有コード候補の分析結果です。
 
@@ -571,6 +594,13 @@ pub fn build_find_shared_prompt(template: &str, context: &str) -> String {
     template.replace("{context}", context)
 }
 
+/// Build an investigate prompt with question and codebase context
+pub fn build_investigate_prompt(template: &str, question: &str, context: &str) -> String {
+    template
+        .replace("{question}", question)
+        .replace("{context}", context)
+}
+
 /// Prompt type for easy selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PromptType {
@@ -591,8 +621,8 @@ pub enum PromptType {
     Analyze,
     /// Coding principles review (DRY, SOLID, GRASP, KISS, YAGNI, etc.)
     Principles,
-    /// Custom prompt
-    Custom,
+    /// Investigate - cross-file investigation driven by a user question
+    Investigate,
 }
 
 impl PromptType {
@@ -607,18 +637,18 @@ impl PromptType {
             PromptType::Principles => PRINCIPLES_REVIEW_PROMPT,
             PromptType::Discovery => DISCOVERY_PROMPT,
             PromptType::Analyze => ANALYZE_PROMPT,
-            PromptType::Custom => "", // Custom prompts provide their own template
+            PromptType::Investigate => INVESTIGATE_PROMPT,
         }
     }
 
     /// Check if this prompt type requires a goal instead of file content
     pub fn requires_goal(&self) -> bool {
-        matches!(self, PromptType::Discovery)
+        matches!(self, PromptType::Discovery | PromptType::Investigate)
     }
 
     /// Check if this prompt type uses raw context (AI does the parsing)
     pub fn uses_raw_context(&self) -> bool {
-        matches!(self, PromptType::Analyze | PromptType::Discovery)
+        matches!(self, PromptType::Analyze | PromptType::Discovery | PromptType::Investigate)
     }
 }
 /// Format a `ProjectContext` into a prompt-friendly string
@@ -763,7 +793,6 @@ mod tests {
         assert!(!PromptType::Architecture.template().is_empty());
         assert!(!PromptType::Holistic.template().is_empty());
         assert!(!PromptType::Principles.template().is_empty());
-        assert!(PromptType::Custom.template().is_empty());
     }
 
     #[test]
