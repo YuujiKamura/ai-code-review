@@ -27,24 +27,13 @@ fn main() {
 
     let args: Vec<String> = std::env::args().collect();
 
+    if args.iter().any(|a| a == "--help" || a == "-h" || a == "help") {
+        print_usage();
+        return;
+    }
+
     if args.len() < 2 {
-        eprintln!("Usage: review <file|--dir <dir>|--diff|--discover|--analyze|--investigate|--hook>");
-        eprintln!("  <file>         Review a single file");
-        eprintln!("  --dir <dir>    Review all source files in directory");
-        eprintln!("  --diff         Review git diff (changed files)");
-        eprintln!("  --discover     Discovery mode (requires --goal)");
-        eprintln!("  --analyze <f>  Analyze file with AI (no AST parsing, AI does the work)");
-        eprintln!("  --investigate <dir>  Cross-file investigation (requires --question)");
-        eprintln!("  --hook         Pre-commit hook mode (review staged diff)");
-        eprintln!("  --hook-install Install git pre-commit hook");
-        eprintln!("  --find-shared <dirA> <dirB>  Find shared/duplicated code between two projects");
-        eprintln!();
-        eprintln!("Options:");
-        eprintln!("  --backend <gemini|claude>  AI backend (default: gemini)");
-        eprintln!("  --prompt <default|quick|security|architecture|holistic|principles|discovery|analyze>");
-        eprintln!("  --context                  Enable project context (module tree, dependencies)");
-        eprintln!("  --goal <text>              Project goal for discovery mode");
-        eprintln!("  --question <text>          Investigation question for --investigate mode");
+        print_usage();
         std::process::exit(1);
     }
 
@@ -216,6 +205,27 @@ fn main() {
     }
 }
 
+fn print_usage() {
+    println!("Usage: review <file|--dir <dir>|--diff|--discover|--analyze|--investigate|--hook>");
+    println!("  <file>         Review a single file");
+    println!("  --dir <dir>    Review all source files in directory");
+    println!("  --diff         Review git diff (changed files)");
+    println!("  --discover     Discovery mode (requires --goal)");
+    println!("  --analyze <f>  Analyze file with AI (no AST parsing, AI does the work)");
+    println!("  --investigate <dir>  Cross-file investigation (requires --question)");
+    println!("  --hook         Pre-commit hook mode (review staged diff)");
+    println!("  --hook-install Install git pre-commit hook");
+    println!("  --find-shared <dirA> <dirB>  Find shared/duplicated code between two projects");
+    println!();
+    println!("Options:");
+    println!("  -h, --help                Show this help");
+    println!("  --backend <gemini|claude> AI backend (default: gemini)");
+    println!("  --prompt <default|quick|security|architecture|holistic|principles|discovery|analyze>");
+    println!("  --context                 Enable project context (module tree, dependencies)");
+    println!("  --goal <text>             Project goal for discovery mode");
+    println!("  --question <text>         Investigation question for --investigate mode");
+}
+
 enum Mode {
     File(PathBuf),
     Dir(PathBuf),
@@ -287,10 +297,13 @@ fn review_directory(dir: &Path, backend: Backend, prompt_type: PromptType, conte
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 fn review_diff(backend: Backend, prompt_type: PromptType, context_enabled: bool) {
-    // Get changed files from git
+    let cwd = std::env::current_dir().unwrap_or_default();
+
+    // Get changed files from git (relative to cwd)
     let output = {
         let mut cmd = Command::new("git");
         cmd.args(["diff", "--name-only", "HEAD"]);
+        cmd.current_dir(&cwd);
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
@@ -303,7 +316,7 @@ fn review_diff(backend: Backend, prompt_type: PromptType, context_enabled: bool)
         Ok(o) => String::from_utf8_lossy(&o.stdout)
             .lines()
             .filter(|l| !l.is_empty())
-            .map(PathBuf::from)
+            .map(|l| cwd.join(l))
             .collect(),
         Err(_) => {
             eprintln!("Failed to get git diff");
@@ -316,7 +329,6 @@ fn review_diff(backend: Backend, prompt_type: PromptType, context_enabled: bool)
         return;
     }
 
-    let cwd = std::env::current_dir().unwrap_or_default();
     let reviewer = match CodeReviewer::new(&cwd) {
         Ok(r) => r.with_backend(backend).with_prompt_type(prompt_type).with_context(context_enabled),
         Err(e) => {
