@@ -623,6 +623,8 @@ pub enum PromptType {
     Principles,
     /// Investigate - cross-file investigation driven by a user question
     Investigate,
+    /// Custom prompt template set by caller
+    Custom,
 }
 
 impl PromptType {
@@ -638,6 +640,7 @@ impl PromptType {
             PromptType::Discovery => DISCOVERY_PROMPT,
             PromptType::Analyze => ANALYZE_PROMPT,
             PromptType::Investigate => INVESTIGATE_PROMPT,
+            PromptType::Custom => "",
         }
     }
 

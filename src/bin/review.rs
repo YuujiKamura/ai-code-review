@@ -44,6 +44,7 @@ fn main() {
     let mut context_enabled = false;
     let mut goal: Option<String> = None;
     let mut question: Option<String> = None;
+    let mut target: Option<PathBuf> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -135,12 +136,33 @@ fn main() {
             "--context" => {
                 context_enabled = true;
             }
+            "--target" => {
+                i += 1;
+                if i < args.len() {
+                    target = Some(PathBuf::from(&args[i]));
+                } else {
+                    eprintln!("Error: --target requires a path");
+                    std::process::exit(1);
+                }
+            }
             arg if !arg.starts_with('-') => {
                 mode = Mode::File(PathBuf::from(arg));
             }
             _ => {}
         }
         i += 1;
+    }
+
+    if matches!(mode, Mode::Diff | Mode::Discover(_) | Mode::Hook | Mode::HookInstall) && target.is_none() {
+        eprintln!("Error: This mode requires --target <path>");
+        std::process::exit(1);
+    }
+    if let Some(t) = &target {
+        if !t.exists() {
+            eprintln!("Error: --target path not found: {}", t.display());
+            std::process::exit(1);
+        }
+        eprintln!("[target] {}", t.display());
     }
 
     // Handle --discover mode
@@ -182,10 +204,23 @@ fn main() {
             review_directory(&dir, backend, prompt_type, context_enabled);
         }
         Mode::Diff => {
-            review_diff(backend, prompt_type, context_enabled);
+            review_diff(
+                backend,
+                prompt_type,
+                context_enabled,
+                target
+                    .as_deref()
+                    .expect("target required for diff mode"),
+            );
         }
         Mode::Discover(goal) => {
-            discover_architecture(&goal, backend);
+            discover_architecture(
+                &goal,
+                backend,
+                target
+                    .as_deref()
+                    .expect("target required for discover mode"),
+            );
         }
         Mode::Analyze(path) => {
             analyze_with_ai(&path, backend);
@@ -197,10 +232,21 @@ fn main() {
             find_shared_modules(&path_a, &path_b, backend);
         }
         Mode::Hook => {
-            run_hook(backend, prompt_type, context_enabled);
+            run_hook(
+                backend,
+                prompt_type,
+                context_enabled,
+                target
+                    .as_deref()
+                    .expect("target required for hook mode"),
+            );
         }
         Mode::HookInstall => {
-            install_hook();
+            install_hook(
+                target
+                    .as_deref()
+                    .expect("target required for hook-install mode"),
+            );
         }
     }
 }
@@ -224,6 +270,7 @@ fn print_usage() {
     println!("  --context                 Enable project context (module tree, dependencies)");
     println!("  --goal <text>             Project goal for discovery mode");
     println!("  --question <text>         Investigation question for --investigate mode");
+    println!("  --target <path>           Target repo/dir (required for --diff/--discover/--hook/--hook-install)");
 }
 
 enum Mode {
@@ -296,8 +343,8 @@ fn review_directory(dir: &Path, backend: Backend, prompt_type: PromptType, conte
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-fn review_diff(backend: Backend, prompt_type: PromptType, context_enabled: bool) {
-    let cwd = std::env::current_dir().unwrap_or_default();
+fn review_diff(backend: Backend, prompt_type: PromptType, context_enabled: bool, target: &Path) {
+    let cwd = target.to_path_buf();
 
     // Get changed files from git (relative to cwd)
     let output = {
@@ -531,8 +578,8 @@ fn investigate_codebase(dir: &Path, question: &str, backend: Backend) {
     }
 }
 
-fn discover_architecture(goal: &str, backend: Backend) {
-    let cwd = std::env::current_dir().unwrap_or_default();
+fn discover_architecture(goal: &str, backend: Backend, target: &Path) {
+    let cwd = target.to_path_buf();
 
     // Find src directory or use current directory
     let src_dir = if cwd.join("src").exists() {
@@ -634,8 +681,8 @@ fn find_shared_modules(path_a: &Path, path_b: &Path, backend: Backend) {
     }
 }
 
-fn run_hook(backend: Backend, prompt_type: PromptType, context_enabled: bool) {
-    let cwd = std::env::current_dir().unwrap_or_default();
+fn run_hook(backend: Backend, prompt_type: PromptType, context_enabled: bool, target: &Path) {
+    let cwd = target.to_path_buf();
 
     // Get staged diff
     let diff = {
@@ -729,8 +776,8 @@ fn run_hook(backend: Backend, prompt_type: PromptType, context_enabled: bool) {
     }
 }
 
-fn install_hook() {
-    let cwd = std::env::current_dir().unwrap_or_default();
+fn install_hook(target: &Path) {
+    let cwd = target.to_path_buf();
     let hook_dir = cwd.join(".git").join("hooks");
     if !hook_dir.exists() {
         eprintln!("Error: Not a git repository (no .git/hooks)");
