@@ -40,6 +40,33 @@ cargo run --features gui --bin gui
 
 GUIは `gui-shell` を呼び出す最小シェルとして用意しており、ここから再構成する想定。
 
+### CLI（対象指定ルール）
+
+`review` の repoスコープモードは、暗黙のカレントディレクトリを使いません。  
+対象を明示するため、`--target <path>` が必須です。
+
+- `--diff`
+- `--discover`
+- `--hook`
+- `--hook-install`
+
+例:
+
+```bash
+# OK: 対象を明示
+cargo run --bin review -- --diff --target C:/dev/win-zig-bindgen
+
+# OK: discovery も対象必須
+cargo run --bin review -- --discover --goal "WinRT bindings改善" --target C:/dev/win-zig-bindgen
+
+# NG: 対象未指定（エラー）
+cargo run --bin review -- --diff
+```
+
+補足:
+- `<file>` モードや `--dir` / `--analyze` / `--investigate` は、引数で対象パスを直接渡すため `--target` は不要です。
+- 実行時に `[target] ...` を表示し、レビュー対象の取り違えを防ぎます。
+
 ### 設計レビュー（推奨）
 
 ```rust
