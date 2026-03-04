@@ -1,2 +1,9 @@
 /target
 Cargo.lock
+
+# Skill-miner generated artifacts (summaries/reports/tmp datasets)
+reports/
+tmp/
+*.summary.json
+*.summaries.json
+*skill-miner*.json
