@@ -7,3 +7,4 @@ tmp/
 *.summary.json
 *.summaries.json
 *skill-miner*.json
+LOCAL_APPDATA_FONTCONFIG_CACHE/

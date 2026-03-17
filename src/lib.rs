@@ -96,7 +96,7 @@ pub use prompt::{
     PRINCIPLES_REVIEW_PROMPT, QUICK_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT,
 };
 pub use result::{ReviewResult, ReviewSeverity, ReviewSummary};
-pub use reviewer::CodeReviewer;
+pub use reviewer::{CodeReviewer, ReviewConfig, perform_multi_review};
 pub use utils::fs::{walk_source_files, SOURCE_EXTENSIONS};
 
 #[cfg(test)]

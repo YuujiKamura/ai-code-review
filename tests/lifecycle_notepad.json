@@ -1,0 +1,10 @@
+{
+  "exe": "C:/Windows/System32/notepad.exe",
+  "steps": [
+    { "action": "wait", "seconds": 3 },
+    { "action": "screenshot", "expect": "メモ帳（Notepad）のウィンドウが開いている。テキスト入力エリアが見える" },
+    { "action": "key", "keys": "Hello from lifecycle test!", "comment": "テキスト入力" },
+    { "action": "wait", "seconds": 1 },
+    { "action": "screenshot", "expect": "メモ帳に 'Hello from lifecycle test!' というテキストが入力されている" }
+  ]
+}

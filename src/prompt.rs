@@ -623,6 +623,8 @@ pub enum PromptType {
     Principles,
     /// Investigate - cross-file investigation driven by a user question
     Investigate,
+    /// Multi-perspective parallel review (security + architecture + principles + default)
+    Multi,
     /// Custom prompt template set by caller
     Custom,
 }
@@ -640,6 +642,7 @@ impl PromptType {
             PromptType::Discovery => DISCOVERY_PROMPT,
             PromptType::Analyze => ANALYZE_PROMPT,
             PromptType::Investigate => INVESTIGATE_PROMPT,
+            PromptType::Multi => DEFAULT_REVIEW_PROMPT, // fallback; actual dispatch in reviewer
             PromptType::Custom => "",
         }
     }

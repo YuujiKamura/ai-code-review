@@ -14,7 +14,10 @@ use folder_watcher::FolderWatcher;
 use crate::context::gather_context;
 use crate::error::{CodeReviewError, Result};
 use crate::git::get_git_diff;
-use crate::prompt::{build_prompt, build_prompt_with_context, PromptType, DEFAULT_REVIEW_PROMPT};
+use crate::prompt::{
+    build_prompt, build_prompt_with_context, PromptType, DEFAULT_REVIEW_PROMPT,
+    SECURITY_REVIEW_PROMPT, ARCHITECTURE_REVIEW_PROMPT, PRINCIPLES_REVIEW_PROMPT,
+};
 use crate::result::ReviewResult;
 use crate::utils::fs::SOURCE_EXTENSIONS;
 
@@ -63,9 +66,83 @@ fn build_review_prompt(
     }
 }
 
+/// Prompt labels and templates for multi-perspective review
+const MULTI_REVIEW_PROMPTS: &[(&str, &str)] = &[
+    ("Security", SECURITY_REVIEW_PROMPT),
+    ("Architecture", ARCHITECTURE_REVIEW_PROMPT),
+    ("Principles", PRINCIPLES_REVIEW_PROMPT),
+    ("Default", DEFAULT_REVIEW_PROMPT),
+];
+
+/// Run multiple review perspectives in parallel and merge results.
+///
+/// Each perspective uses a different prompt template. Results are merged
+/// into a single `ReviewResult` with section headers.
+pub fn perform_multi_review(
+    path: &Path,
+    config: &ReviewConfig,
+    base_path: Option<&Path>,
+) -> Result<ReviewResult> {
+    use rayon::prelude::*;
+
+    // Get content once (shared across all perspectives)
+    let (content, is_diff) = match get_git_diff(path) {
+        Some(diff) => (diff, true),
+        None => {
+            let full = fs::read_to_string(path).map_err(CodeReviewError::IoError)?;
+            (full, false)
+        }
+    };
+
+    if content.trim().is_empty() {
+        return Err(CodeReviewError::IoError(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "File content is empty",
+        )));
+    }
+
+    let labeled_content;
+    let prompt_content: &str = if is_diff {
+        &content
+    } else {
+        labeled_content = format!("（注: git diffが取得できないため、ファイル全体を表示しています。変更点ではなくファイル全体をレビューしてください）\n\n{}", content);
+        &labeled_content
+    };
+
+    // Run all perspectives in parallel
+    let results: Vec<(String, std::result::Result<String, String>)> = MULTI_REVIEW_PROMPTS
+        .par_iter()
+        .map(|(label, template)| {
+            let mut per_config = config.clone();
+            per_config.prompt_template = template.to_string();
+            let prompt = build_review_prompt(path, prompt_content, &per_config, base_path);
+            let options = if let Some(ref m) = config.model {
+                AnalyzeOptions::with_model(m).with_backend(config.backend)
+            } else {
+                AnalyzeOptions::default().with_backend(config.backend)
+            };
+            let result = ai_prompt(&prompt, options).map_err(|e| e.to_string());
+            (label.to_string(), result)
+        })
+        .collect();
+
+    // Merge results
+    let mut merged = String::new();
+    for (label, result) in &results {
+        merged.push_str(&format!("## {} Review\n\n", label));
+        match result {
+            Ok(review) => merged.push_str(review),
+            Err(e) => merged.push_str(&format!("⚠ Review failed: {}", e)),
+        }
+        merged.push_str("\n\n---\n\n");
+    }
+
+    Ok(ReviewResult::new(path.to_path_buf(), merged).with_content(content))
+}
+
 /// Configuration for review execution
 #[derive(Clone)]
-pub(crate) struct ReviewConfig {
+pub struct ReviewConfig {
     pub backend: Backend,
     pub model: Option<String>,
     pub prompt_template: String,
@@ -142,6 +219,8 @@ pub struct CodeReviewer {
     config: Arc<ReviewConfig>,
     /// File extensions to watch
     extensions: Vec<String>,
+    /// Multi-perspective review mode
+    multi_mode: bool,
     /// Debounce duration in milliseconds
     debounce_ms: u64,
     /// Callback for review results
@@ -174,6 +253,7 @@ impl CodeReviewer {
                 context_depth: 50,
             }),
             extensions: SOURCE_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
+            multi_mode: false,
             debounce_ms: DEFAULT_DEBOUNCE_MS,
             on_review: None,
             watcher: None,
@@ -211,6 +291,7 @@ impl CodeReviewer {
 
     /// Set the prompt type
     pub fn with_prompt_type(mut self, prompt_type: PromptType) -> Self {
+        self.multi_mode = prompt_type == PromptType::Multi;
         if prompt_type != PromptType::Custom {
             Arc::make_mut(&mut self.config).prompt_template = prompt_type.template().to_string();
         }
@@ -318,7 +399,11 @@ impl CodeReviewer {
 
     /// Review a single file immediately (without watching)
     pub fn review_file(&self, path: &Path) -> Result<ReviewResult> {
-        perform_review(path, &self.config, Some(&self.path))
+        if self.multi_mode {
+            perform_multi_review(path, &self.config, Some(&self.path))
+        } else {
+            perform_review(path, &self.config, Some(&self.path))
+        }
     }
 }
 
