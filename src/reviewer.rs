@@ -60,10 +60,22 @@ fn build_review_prompt(
         .map(|ctx| ctx.to_prompt_string());
 
     // Build prompt with or without context
-    match context_str {
+    let mut prompt = match context_str {
         Some(ctx) => build_prompt_with_context(&config.prompt_template, &file_name, content, &ctx),
         None => build_prompt(&config.prompt_template, &file_name, content),
+    };
+
+    // Inject extra context from REVIEW_EXTRA_CONTEXT env var (file path)
+    if let Ok(extra_path) = std::env::var("REVIEW_EXTRA_CONTEXT") {
+        if let Ok(extra) = fs::read_to_string(&extra_path) {
+            if !extra.trim().is_empty() {
+                prompt.push_str("\n\n## Additional Review Context\n");
+                prompt.push_str(&extra);
+            }
+        }
     }
+
+    prompt
 }
 
 /// Prompt labels and templates for multi-perspective review

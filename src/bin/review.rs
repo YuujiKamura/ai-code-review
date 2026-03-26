@@ -18,6 +18,18 @@ use cli_ai_analyzer::{prompt as ai_prompt, AnalyzeOptions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Read REVIEW_EXTRA_CONTEXT env var (file path) and append its content to the prompt.
+fn append_extra_context(prompt: &mut String) {
+    if let Ok(extra_path) = std::env::var("REVIEW_EXTRA_CONTEXT") {
+        if let Ok(extra) = std::fs::read_to_string(&extra_path) {
+            if !extra.trim().is_empty() {
+                prompt.push_str("\n\n## Additional Review Context\n");
+                prompt.push_str(&extra);
+            }
+        }
+    }
+}
+
 fn main() {
     // Force UTF-8 output on Windows (prevents cp932 garbling when called from Python/hooks)
     #[cfg(target_os = "windows")]
@@ -512,7 +524,8 @@ fn analyze_with_ai(file_path: &Path, backend: Backend) {
     context.push_str(&raw_ctx.to_prompt_string());
 
     // Build prompt and call AI
-    let prompt = build_analyze_prompt(ANALYZE_PROMPT, &context);
+    let mut prompt = build_analyze_prompt(ANALYZE_PROMPT, &context);
+    append_extra_context(&mut prompt);
     let options = AnalyzeOptions::default().with_backend(backend);
 
     println!("## Analyze: {}\n", file_name);
@@ -565,7 +578,8 @@ fn investigate_codebase(dir: &Path, question: &str, backend: Backend) {
         context.push_str("\n```\n\n");
     }
 
-    let prompt = build_investigate_prompt(INVESTIGATE_PROMPT, question, &context);
+    let mut prompt = build_investigate_prompt(INVESTIGATE_PROMPT, question, &context);
+    append_extra_context(&mut prompt);
     let options = AnalyzeOptions::default().with_backend(backend);
 
     match ai_prompt(&prompt, options) {
@@ -612,7 +626,8 @@ fn discover_architecture(goal: &str, backend: Backend, target: &Path) {
     full_structure.push_str(&structure);
 
     // Build prompt
-    let prompt = build_discovery_prompt(DISCOVERY_PROMPT, goal, &full_structure);
+    let mut prompt = build_discovery_prompt(DISCOVERY_PROMPT, goal, &full_structure);
+    append_extra_context(&mut prompt);
 
     // Call AI
     let options = AnalyzeOptions::default().with_backend(backend);
@@ -668,7 +683,8 @@ fn find_shared_modules(path_a: &Path, path_b: &Path, backend: Backend) {
 
     // Phase 2: AI analysis
     eprintln!("--- AI Analysis ---\n");
-    let prompt = build_find_shared_prompt(FIND_SHARED_PROMPT, &report_text);
+    let mut prompt = build_find_shared_prompt(FIND_SHARED_PROMPT, &report_text);
+    append_extra_context(&mut prompt);
     let options = AnalyzeOptions::default().with_backend(backend);
 
     match ai_prompt(&prompt, options) {
@@ -738,7 +754,7 @@ fn run_hook(backend: Backend, prompt_type: PromptType, context_enabled: bool, ta
         String::new()
     };
 
-    let prompt = match prompt_type {
+    let mut prompt = match prompt_type {
         PromptType::Default => {
             format!(
                 "Code review of staged changes. If critical issues found, start line with ⚠. If OK, respond ✓ LGTM. Be concise.\n\nFocus: design flaws, bugs, security issues.\n\n```diff\n{}\n```",
@@ -758,6 +774,7 @@ fn run_hook(backend: Backend, prompt_type: PromptType, context_enabled: bool, ta
             )
         }
     };
+    append_extra_context(&mut prompt);
 
     let options = AnalyzeOptions::default().with_backend(backend);
     match ai_prompt(&prompt, options) {
