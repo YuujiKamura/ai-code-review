@@ -93,7 +93,7 @@ pub use prompt::{
     build_investigate_prompt, build_prompt, build_prompt_with_context, PromptType,
     ANALYZE_PROMPT, ARCHITECTURE_REVIEW_PROMPT, ARCHITECTURE_REVIEW_WITH_CONTEXT_PROMPT,
     DEFAULT_REVIEW_PROMPT, DISCOVERY_PROMPT, FIND_SHARED_PROMPT, INVESTIGATE_PROMPT,
-    PRINCIPLES_REVIEW_PROMPT, QUICK_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT,
+    PRINCIPLES_REVIEW_PROMPT, QDD_PROMPT, QUICK_REVIEW_PROMPT, SECURITY_REVIEW_PROMPT,
 };
 pub use result::{ReviewResult, ReviewSeverity, ReviewSummary};
 pub use reviewer::{CodeReviewer, ReviewConfig, perform_multi_review};

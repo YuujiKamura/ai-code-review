@@ -12,7 +12,7 @@ use ai_code_review::{
     build_investigate_prompt, gather_raw_context, generate_module_tree,
     shared_finder::find_shared_candidates,
     walk_source_files, Backend, CodeReviewer, PromptType, ANALYZE_PROMPT, DISCOVERY_PROMPT,
-    FIND_SHARED_PROMPT, INVESTIGATE_PROMPT, SOURCE_EXTENSIONS,
+    FIND_SHARED_PROMPT, INVESTIGATE_PROMPT, QDD_PROMPT, SOURCE_EXTENSIONS,
 };
 use cli_ai_analyzer::{prompt as ai_prompt, AnalyzeOptions};
 use std::path::{Path, PathBuf};
@@ -99,6 +99,10 @@ fn main() {
             "--diff" => {
                 mode = Mode::Diff;
             }
+            "--qdd" => {
+                mode = Mode::Qdd;
+                prompt_type = PromptType::Qdd;
+            }
             "--hook" => {
                 mode = Mode::Hook;
             }
@@ -166,7 +170,7 @@ fn main() {
         i += 1;
     }
 
-    if matches!(mode, Mode::Diff | Mode::Discover(_) | Mode::Hook | Mode::HookInstall) && target.is_none() {
+    if matches!(mode, Mode::Diff | Mode::Qdd | Mode::Discover(_) | Mode::Hook | Mode::HookInstall) && target.is_none() {
         eprintln!("Error: This mode requires --target <path>");
         std::process::exit(1);
     }
@@ -244,6 +248,14 @@ fn main() {
         Mode::FindShared(path_a, path_b) => {
             find_shared_modules(&path_a, &path_b, backend);
         }
+        Mode::Qdd => {
+            run_qdd(
+                backend,
+                target
+                    .as_deref()
+                    .expect("target required for qdd mode"),
+            );
+        }
         Mode::Hook => {
             run_hook(
                 backend,
@@ -265,10 +277,11 @@ fn main() {
 }
 
 fn print_usage() {
-    println!("Usage: review <file|--dir <dir>|--diff|--discover|--analyze|--investigate|--hook>");
+    println!("Usage: review <file|--dir <dir>|--diff|--qdd|--discover|--analyze|--investigate|--hook>");
     println!("  <file>         Review a single file");
     println!("  --dir <dir>    Review all source files in directory");
     println!("  --diff         Review git diff (changed files)");
+    println!("  --qdd          QDD mode: generate questions (not answers) from diff");
     println!("  --discover     Discovery mode (requires --goal)");
     println!("  --analyze <f>  Analyze file with AI (no AST parsing, AI does the work)");
     println!("  --investigate <dir>  Cross-file investigation (requires --question)");
@@ -283,7 +296,7 @@ fn print_usage() {
     println!("  --context                 Enable project context (module tree, dependencies)");
     println!("  --goal <text>             Project goal for discovery mode");
     println!("  --question <text>         Investigation question for --investigate mode");
-    println!("  --target <path>           Target repo/dir (required for --diff/--discover/--hook/--hook-install)");
+    println!("  --target <path>           Target repo/dir (required for --diff/--qdd/--discover/--hook/--hook-install)");
 }
 
 enum Mode {
@@ -293,6 +306,7 @@ enum Mode {
     Discover(String),              // goal
     Analyze(PathBuf),              // file to analyze with AI
     Investigate(PathBuf, String),  // (dir, question)
+    Qdd,                           // QDD mode - generate questions from diff/file
     Hook,                          // Pre-commit hook mode
     HookInstall,                   // Install git pre-commit hook
     FindShared(PathBuf, PathBuf),  // (path_a, path_b)
@@ -694,6 +708,60 @@ fn find_shared_modules(path_a: &Path, path_b: &Path, backend: Backend) {
         Err(e) => {
             eprintln!("AI analysis failed: {}", e);
             eprintln!("(Static analysis results are shown above)");
+        }
+    }
+}
+
+fn run_qdd(backend: Backend, target: &Path) {
+    let cwd = target.to_path_buf();
+
+    // Get diff (staged + unstaged)
+    let diff = {
+        let mut cmd = Command::new("git");
+        cmd.args(["diff", "HEAD"]);
+        cmd.current_dir(&cwd);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        match cmd.output() {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            _ => {
+                eprintln!("Failed to get git diff");
+                std::process::exit(1);
+            }
+        }
+    };
+
+    if diff.trim().is_empty() {
+        println!("No changes to question.");
+        return;
+    }
+
+    let diff_lines: Vec<&str> = diff.lines().collect();
+    eprintln!("=== QDD: Question-Driven Development ===");
+    eprintln!("Generating questions for {} lines of diff...\n", diff_lines.len());
+
+    let mut prompt = QDD_PROMPT
+        .replace("{file_name}", "git diff HEAD")
+        .replace("{content}", &diff);
+    append_extra_context(&mut prompt);
+
+    let options = AnalyzeOptions::default().with_backend(backend);
+    match ai_prompt(&prompt, options) {
+        Ok(response) => {
+            println!("{}", response);
+
+            // Count high-severity questions and warn
+            let high_count = response.lines().filter(|l| l.trim_start().starts_with("[high]")).count();
+            if high_count > 0 {
+                eprintln!("\n⚠ {} high-priority question(s) found. Consider answering before push.", high_count);
+            }
+        }
+        Err(e) => {
+            eprintln!("QDD failed: {}", e);
+            std::process::exit(1);
         }
     }
 }
