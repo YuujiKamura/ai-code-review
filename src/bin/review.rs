@@ -82,6 +82,7 @@ fn main() {
                         "discovery" => PromptType::Discovery,
                         "analyze" => PromptType::Analyze,
                         "multi" => PromptType::Multi,
+                        "qdd" => PromptType::Qdd,
                         _ => PromptType::Default,
                     };
                     // holisticは自動でcontext有効
@@ -292,7 +293,7 @@ fn print_usage() {
     println!("Options:");
     println!("  -h, --help                Show this help");
     println!("  --backend <gemini|claude> AI backend (default: gemini)");
-    println!("  --prompt <default|quick|security|architecture|holistic|principles|discovery|analyze|multi>");
+    println!("  --prompt <default|quick|security|architecture|holistic|principles|discovery|analyze|multi|qdd>");
     println!("  --context                 Enable project context (module tree, dependencies)");
     println!("  --goal <text>             Project goal for discovery mode");
     println!("  --question <text>         Investigation question for --investigate mode");
