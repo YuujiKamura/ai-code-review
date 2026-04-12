@@ -9,3 +9,4 @@ tmp/
 *skill-miner*.json
 LOCAL_APPDATA_FONTCONFIG_CACHE/
 .omc/
+target-codex/
