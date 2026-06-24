@@ -51,6 +51,7 @@ fn main() {
 
     // Parse arguments
     let mut backend = Backend::Gemini;
+    let mut model: Option<String> = None;
     let mut prompt_type = PromptType::Default;
     let mut mode = Mode::File(PathBuf::new());
     let mut context_enabled = false;
@@ -66,8 +67,15 @@ fn main() {
                 if i < args.len() {
                     backend = match args[i].to_lowercase().as_str() {
                         "claude" => Backend::Claude,
+                        "codex" => Backend::Codex,
                         _ => Backend::Gemini,
                     };
+                }
+            }
+            "--model" => {
+                i += 1;
+                if i < args.len() {
+                    model = Some(args[i].clone());
                 }
             }
             "--prompt" => {
@@ -216,14 +224,15 @@ fn main() {
                 eprintln!("Error: No file specified");
                 std::process::exit(1);
             }
-            review_file(&path, backend, prompt_type, context_enabled);
+            review_file(&path, backend, model.clone(), prompt_type, context_enabled);
         }
         Mode::Dir(dir) => {
-            review_directory(&dir, backend, prompt_type, context_enabled);
+            review_directory(&dir, backend, model.clone(), prompt_type, context_enabled);
         }
         Mode::Diff => {
             review_diff(
                 backend,
+                model.clone(),
                 prompt_type,
                 context_enabled,
                 target
@@ -235,23 +244,25 @@ fn main() {
             discover_architecture(
                 &goal,
                 backend,
+                model.clone(),
                 target
                     .as_deref()
                     .expect("target required for discover mode"),
             );
         }
         Mode::Analyze(path) => {
-            analyze_with_ai(&path, backend);
+            analyze_with_ai(&path, backend, model.clone());
         }
         Mode::Investigate(dir, question) => {
-            investigate_codebase(&dir, &question, backend);
+            investigate_codebase(&dir, &question, backend, model.clone());
         }
         Mode::FindShared(path_a, path_b) => {
-            find_shared_modules(&path_a, &path_b, backend);
+            find_shared_modules(&path_a, &path_b, backend, model.clone());
         }
         Mode::Qdd => {
             run_qdd(
                 backend,
+                model.clone(),
                 target
                     .as_deref()
                     .expect("target required for qdd mode"),
@@ -260,6 +271,7 @@ fn main() {
         Mode::Hook => {
             run_hook(
                 backend,
+                model.clone(),
                 prompt_type,
                 context_enabled,
                 target
@@ -313,15 +325,18 @@ enum Mode {
     FindShared(PathBuf, PathBuf),  // (path_a, path_b)
 }
 
-fn review_file(path: &Path, backend: Backend, prompt_type: PromptType, context_enabled: bool) {
+fn review_file(path: &Path, backend: Backend, model: Option<String>, prompt_type: PromptType, context_enabled: bool) {
     let parent = path.parent().unwrap_or(std::path::Path::new("."));
-    let reviewer = match CodeReviewer::new(parent) {
+    let mut reviewer = match CodeReviewer::new(parent) {
         Ok(r) => r.with_backend(backend).with_prompt_type(prompt_type).with_context(context_enabled),
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
         }
     };
+    if let Some(ref m) = model {
+        reviewer = reviewer.with_model(m);
+    }
 
     match reviewer.review_file(path) {
         Ok(result) => {
@@ -336,14 +351,17 @@ fn review_file(path: &Path, backend: Backend, prompt_type: PromptType, context_e
     }
 }
 
-fn review_directory(dir: &Path, backend: Backend, prompt_type: PromptType, context_enabled: bool) {
-    let reviewer = match CodeReviewer::new(dir) {
+fn review_directory(dir: &Path, backend: Backend, model: Option<String>, prompt_type: PromptType, context_enabled: bool) {
+    let mut reviewer = match CodeReviewer::new(dir) {
         Ok(r) => r.with_backend(backend).with_prompt_type(prompt_type).with_context(context_enabled),
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
         }
     };
+    if let Some(ref m) = model {
+        reviewer = reviewer.with_model(m);
+    }
 
     // Find source files
     let files = find_modified_files(dir, SOURCE_EXTENSIONS);
@@ -371,7 +389,7 @@ fn review_directory(dir: &Path, backend: Backend, prompt_type: PromptType, conte
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-fn review_diff(backend: Backend, prompt_type: PromptType, context_enabled: bool, target: &Path) {
+fn review_diff(backend: Backend, model: Option<String>, prompt_type: PromptType, context_enabled: bool, target: &Path) {
     let cwd = target.to_path_buf();
 
     // Get changed files from git (relative to cwd)
@@ -404,13 +422,16 @@ fn review_diff(backend: Backend, prompt_type: PromptType, context_enabled: bool,
         return;
     }
 
-    let reviewer = match CodeReviewer::new(&cwd) {
+    let mut reviewer = match CodeReviewer::new(&cwd) {
         Ok(r) => r.with_backend(backend).with_prompt_type(prompt_type).with_context(context_enabled),
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
         }
     };
+    if let Some(ref m) = model {
+        reviewer = reviewer.with_model(m);
+    }
 
     for file in changed_files {
         if !file.exists() {
@@ -509,7 +530,7 @@ fn find_files(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
     result
 }
 
-fn analyze_with_ai(file_path: &Path, backend: Backend) {
+fn analyze_with_ai(file_path: &Path, backend: Backend, model: Option<String>) {
     if !file_path.exists() {
         eprintln!("Error: File not found: {:?}", file_path);
         std::process::exit(1);
@@ -541,7 +562,11 @@ fn analyze_with_ai(file_path: &Path, backend: Backend) {
     // Build prompt and call AI
     let mut prompt = build_analyze_prompt(ANALYZE_PROMPT, &context);
     append_extra_context(&mut prompt);
-    let options = AnalyzeOptions::default().with_backend(backend);
+    let options = if let Some(ref m) = model {
+        AnalyzeOptions::with_model(m).with_backend(backend)
+    } else {
+        AnalyzeOptions::default().with_backend(backend)
+    };
 
     println!("## Analyze: {}\n", file_name);
 
@@ -556,7 +581,7 @@ fn analyze_with_ai(file_path: &Path, backend: Backend) {
     }
 }
 
-fn investigate_codebase(dir: &Path, question: &str, backend: Backend) {
+fn investigate_codebase(dir: &Path, question: &str, backend: Backend, model: Option<String>) {
     if !dir.exists() {
         eprintln!("Error: Directory not found: {:?}", dir);
         std::process::exit(1);
@@ -595,7 +620,11 @@ fn investigate_codebase(dir: &Path, question: &str, backend: Backend) {
 
     let mut prompt = build_investigate_prompt(INVESTIGATE_PROMPT, question, &context);
     append_extra_context(&mut prompt);
-    let options = AnalyzeOptions::default().with_backend(backend);
+    let options = if let Some(ref m) = model {
+        AnalyzeOptions::with_model(m).with_backend(backend)
+    } else {
+        AnalyzeOptions::default().with_backend(backend)
+    };
 
     match ai_prompt(&prompt, options) {
         Ok(response) => {
@@ -608,7 +637,7 @@ fn investigate_codebase(dir: &Path, question: &str, backend: Backend) {
     }
 }
 
-fn discover_architecture(goal: &str, backend: Backend, target: &Path) {
+fn discover_architecture(goal: &str, backend: Backend, model: Option<String>, target: &Path) {
     let cwd = target.to_path_buf();
 
     // Find src directory or use current directory
@@ -645,7 +674,11 @@ fn discover_architecture(goal: &str, backend: Backend, target: &Path) {
     append_extra_context(&mut prompt);
 
     // Call AI
-    let options = AnalyzeOptions::default().with_backend(backend);
+    let options = if let Some(ref m) = model {
+        AnalyzeOptions::with_model(m).with_backend(backend)
+    } else {
+        AnalyzeOptions::default().with_backend(backend)
+    };
 
     println!("## Discovery: {}\n", goal);
     println!("現在の構造:\n```\n{}\n```\n", full_structure);
@@ -663,7 +696,7 @@ fn discover_architecture(goal: &str, backend: Backend, target: &Path) {
 }
 
 
-fn find_shared_modules(path_a: &Path, path_b: &Path, backend: Backend) {
+fn find_shared_modules(path_a: &Path, path_b: &Path, backend: Backend, model: Option<String>) {
     if !path_a.exists() {
         eprintln!("Error: Directory not found: {:?}", path_a);
         std::process::exit(1);
@@ -700,7 +733,11 @@ fn find_shared_modules(path_a: &Path, path_b: &Path, backend: Backend) {
     eprintln!("--- AI Analysis ---\n");
     let mut prompt = build_find_shared_prompt(FIND_SHARED_PROMPT, &report_text);
     append_extra_context(&mut prompt);
-    let options = AnalyzeOptions::default().with_backend(backend);
+    let options = if let Some(ref m) = model {
+        AnalyzeOptions::with_model(m).with_backend(backend)
+    } else {
+        AnalyzeOptions::default().with_backend(backend)
+    };
 
     match ai_prompt(&prompt, options) {
         Ok(response) => {
@@ -713,7 +750,7 @@ fn find_shared_modules(path_a: &Path, path_b: &Path, backend: Backend) {
     }
 }
 
-fn run_qdd(backend: Backend, target: &Path) {
+fn run_qdd(backend: Backend, model: Option<String>, target: &Path) {
     let cwd = target.to_path_buf();
 
     // Get diff (staged + unstaged)
@@ -749,7 +786,11 @@ fn run_qdd(backend: Backend, target: &Path) {
         .replace("{content}", &diff);
     append_extra_context(&mut prompt);
 
-    let options = AnalyzeOptions::default().with_backend(backend);
+    let options = if let Some(ref m) = model {
+        AnalyzeOptions::with_model(m).with_backend(backend)
+    } else {
+        AnalyzeOptions::default().with_backend(backend)
+    };
     match ai_prompt(&prompt, options) {
         Ok(response) => {
             println!("{}", response);
@@ -767,7 +808,7 @@ fn run_qdd(backend: Backend, target: &Path) {
     }
 }
 
-fn run_hook(backend: Backend, prompt_type: PromptType, context_enabled: bool, target: &Path) {
+fn run_hook(backend: Backend, model: Option<String>, prompt_type: PromptType, context_enabled: bool, target: &Path) {
     let cwd = target.to_path_buf();
 
     // Get staged diff
@@ -845,7 +886,11 @@ fn run_hook(backend: Backend, prompt_type: PromptType, context_enabled: bool, ta
     };
     append_extra_context(&mut prompt);
 
-    let options = AnalyzeOptions::default().with_backend(backend);
+    let options = if let Some(ref m) = model {
+        AnalyzeOptions::with_model(m).with_backend(backend)
+    } else {
+        AnalyzeOptions::default().with_backend(backend)
+    };
     match ai_prompt(&prompt, options) {
         Ok(review) => {
             eprintln!("{}\n", review);
